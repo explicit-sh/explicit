@@ -8,8 +8,13 @@ defmodule Explicit.Application do
     project_dir = resolve_project_dir()
     Application.put_env(:explicit, :project_dir, project_dir)
 
+    # Load schema on boot
+    schema = load_schema(project_dir)
+    Application.put_env(:explicit, :schema, schema)
+
     children = [
       Explicit.ViolationStore,
+      Explicit.DocStore,
       {Explicit.Watcher, project_dir},
       Explicit.SocketServer
     ]
@@ -27,6 +32,13 @@ defmodule Explicit.Application do
         end
 
     find_git_root(Path.expand(dir))
+  end
+
+  defp load_schema(project_dir) do
+    case Explicit.Schema.load(project_dir) do
+      {:ok, schema} -> schema
+      {:error, _} -> %Explicit.Schema{}
+    end
   end
 
   defp find_git_root("/"), do: File.cwd!()

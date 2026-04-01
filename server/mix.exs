@@ -35,7 +35,9 @@ defmodule Explicit.MixProject do
     [
       {:credo, "~> 1.7"},
       {:file_system, "~> 1.0"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:kuddle, "~> 1.1"},
+      {:yaml_elixir, "~> 2.12"}
     ]
   end
 end
