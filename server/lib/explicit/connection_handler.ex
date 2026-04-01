@@ -244,6 +244,109 @@ defmodule Explicit.ConnectionHandler do
     end
   end
 
+  defp handle_method("doc.check_code", %{"file" => file}) do
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+
+    matches = Explicit.Doc.CodePaths.check(file, project_dir, schema)
+    Protocol.encode_ok(%{file: file, matches: matches, total: length(matches)})
+  end
+
+  defp handle_method("doc.check_fixme", params) do
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+
+    files = case Map.get(params, "file") do
+      nil -> Discovery.discover(project_dir, schema)
+      file -> [file]
+    end
+
+    markers = ~w(FIXME TBD TODO XXX [TBD] [FIXME])
+    results = Enum.flat_map(files, fn file ->
+      case File.read(file) do
+        {:ok, content} ->
+          content
+          |> String.split("\n")
+          |> Enum.with_index(1)
+          |> Enum.flat_map(fn {line, line_no} ->
+            found = Enum.filter(markers, &String.contains?(line, &1))
+            Enum.map(found, fn marker ->
+              %{file: file, line: line_no, marker: marker, text: String.trim(line)}
+            end)
+          end)
+        _ -> []
+      end
+    end)
+
+    Protocol.encode_ok(%{total: length(results), markers: results})
+  end
+
+  defp handle_method("doc.lint", _params) do
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+
+    # 1. Validate all docs
+    files = Discovery.discover(project_dir, schema)
+    validation_results = Enum.map(files, fn file ->
+      case Document.parse_file(file) do
+        {:ok, doc} ->
+          {:ok, diags} = Validation.validate(doc, schema)
+          {doc, diags}
+        _ -> nil
+      end
+    end) |> Enum.reject(&is_nil/1)
+
+    errors = Enum.flat_map(validation_results, fn {doc, diags} ->
+      Enum.filter(diags, fn {level, _, _} -> level == :error end)
+      |> Enum.map(fn {_, code, msg} -> %{file: doc.path, id: doc.id, code: code, message: msg} end)
+    end)
+
+    # 2. Find orphans (docs with no refs to/from other docs)
+    docs = Enum.map(validation_results, fn {doc, _} -> doc end)
+    all_refs = extract_all_refs(docs)
+    all_ids = MapSet.new(docs, & &1.id)
+    referenced_ids = MapSet.new(all_refs)
+
+    orphans = docs
+    |> Enum.filter(fn doc ->
+      doc.id != nil and
+        doc.id not in referenced_ids and
+        not has_outgoing_refs?(doc)
+    end)
+    |> Enum.map(fn doc -> %{id: doc.id, path: doc.path, title: doc.title} end)
+
+    # 3. Find dangling refs
+    dangling = all_refs
+    |> Enum.reject(&MapSet.member?(all_ids, &1))
+    |> Enum.uniq()
+
+    # 4. Check fixme markers
+    fixme_count = Enum.sum(Enum.map(files, fn file ->
+      case File.read(file) do
+        {:ok, content} ->
+          ~w(FIXME TBD TODO XXX)
+          |> Enum.map(fn m -> content |> String.split(m) |> length() |> Kernel.-(1) end)
+          |> Enum.sum()
+        _ -> 0
+      end
+    end))
+
+    # 5. Code violations
+    code_summary = ViolationStore.summary()
+
+    Protocol.encode_ok(%{
+      docs: length(files),
+      validation_errors: length(errors),
+      errors: errors,
+      orphaned_docs: length(orphans),
+      orphans: orphans,
+      dangling_refs: dangling,
+      fixme_markers: fixme_count,
+      code_violations: code_summary.total,
+      clean: length(errors) == 0 and code_summary.total == 0
+    })
+  end
+
   defp handle_method("doc.diagnostics", _params) do
     all = DocStore.all()
     diagnostics = Enum.flat_map(all, fn {path, ds} ->
@@ -296,6 +399,32 @@ defmodule Explicit.ConnectionHandler do
       ["", _old_yaml, body] -> "---\n#{yaml}\n---#{body}"
       _ -> "---\n#{yaml}\n---\n\n#{raw}"
     end
+  end
+
+  @ref_fields ~w(supersedes superseded_by enables enabled_by triggers triggered_by
+                  depends_on dependency_of implements implemented_by conflicts_with related)
+
+  defp extract_all_refs(docs) do
+    Enum.flat_map(docs, fn doc ->
+      @ref_fields
+      |> Enum.flat_map(fn field ->
+        case Map.get(doc.frontmatter, field) do
+          refs when is_list(refs) -> refs
+          ref when is_binary(ref) -> [ref]
+          _ -> []
+        end
+      end)
+    end)
+  end
+
+  defp has_outgoing_refs?(doc) do
+    Enum.any?(@ref_fields, fn field ->
+      case Map.get(doc.frontmatter, field) do
+        refs when is_list(refs) and refs != [] -> true
+        ref when is_binary(ref) -> true
+        _ -> false
+      end
+    end)
   end
 
   defp section_to_map(s) do

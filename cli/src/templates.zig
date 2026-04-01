@@ -82,6 +82,17 @@ pub const gitignore =
 pub const claude_settings =
     \\{
     \\  "hooks": {
+    \\    "PostToolUse": [
+    \\      {
+    \\        "matcher": "^(Edit|Write)$",
+    \\        "hooks": [
+    \\          {
+    \\            "type": "command",
+    \\            "command": "explicit hooks claude check-fixme"
+    \\          }
+    \\        ]
+    \\      }
+    \\    ],
     \\    "Stop": [
     \\      {
     \\        "hooks": [
@@ -273,6 +284,101 @@ pub const claude_md_template =
     \\- Use `String.to_existing_atom/1`, never `String.to_atom/1`
     \\- Migrations go in `services/elixir/priv/repo/migrations/`
     \\- Infrastructure changes go in `infrastructure/`
+    \\
+;
+
+pub const skill_adr =
+    \\# Architecture Decision Record
+    \\
+    \\Create an ADR when making a significant technical choice.
+    \\
+    \\## Workflow
+    \\
+    \\1. Ask 3-5 clarifying questions using AskUserQuestion:
+    \\   - What problem does this solve?
+    \\   - What alternatives were considered?
+    \\   - What are the constraints?
+    \\
+    \\2. Check existing docs: `explicit docs list adr`
+    \\
+    \\3. Create the ADR:
+    \\   ```bash
+    \\   explicit docs new adr "Decision Title"
+    \\   ```
+    \\
+    \\4. Edit the generated file to fill in Context, Decision, Consequences
+    \\
+    \\5. Validate: `explicit docs validate`
+    \\
+    \\## Required sections: Context, Decision, Consequences (Positive + Negative)
+    \\
+;
+
+pub const skill_opp =
+    \\# Opportunity
+    \\
+    \\Create an OPP when identifying a business opportunity or feature request.
+    \\
+    \\## Workflow
+    \\
+    \\1. Ask clarifying questions:
+    \\   - What outcome are we trying to achieve?
+    \\   - Who benefits from this?
+    \\   - What does success look like?
+    \\   - What are the risks?
+    \\
+    \\2. Create: `explicit docs new opp "Opportunity Title"`
+    \\
+    \\3. Fill in Description, Impact, Success Metrics
+    \\
+    \\4. When status moves to "pursuing", add a Requirements table
+    \\
+;
+
+pub const skill_inc =
+    \\# Incident Report
+    \\
+    \\Create an INC for post-mortems and incident tracking.
+    \\
+    \\## Workflow
+    \\
+    \\1. Ask brief clarifying questions (incidents need speed):
+    \\   - What happened?
+    \\   - What was the severity?
+    \\   - When did it start/end?
+    \\
+    \\2. Create: `explicit docs new inc "Incident Title"`
+    \\
+    \\3. Fill in Summary, Timeline (table), Root Cause
+    \\
+    \\4. Add Action Items table with owners and due dates
+    \\
+;
+
+pub const skill_spec =
+    \\# Behavioral Specification
+    \\
+    \\Create a SPEC for feature requirements with Gherkin scenarios.
+    \\
+    \\## Workflow
+    \\
+    \\1. Ask clarifying questions:
+    \\   - Who is the user? (As a...)
+    \\   - What do they want? (I want to...)
+    \\   - Why? (So that...)
+    \\   - What are the edge cases?
+    \\
+    \\2. Create: `explicit docs new spec "Feature Title"`
+    \\
+    \\3. Write Story section (As a / I want / So that)
+    \\
+    \\4. Write Gherkin scenarios in code blocks:
+    \\   ```gherkin
+    \\   Scenario: Happy path
+    \\     Given a logged-in user
+    \\     When they click "Submit"
+    \\     Then the form is saved
+    \\   ```
     \\
 ;
 

@@ -150,9 +150,24 @@ fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     try copySchemaKdl(allocator, cwd);
     try writeTemplate(allocator, cwd, "docs/README.md", templates.docs_readme, name);
 
-    // 5. .claude/ config
+    // 5. .claude/ config + skills
     try mkdirSafe(allocator, cwd, ".claude");
     try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
+
+    // Claude skills for doc types
+    const skill_dirs = [_][]const u8{
+        ".claude/skills/adr",
+        ".claude/skills/opportunity",
+        ".claude/skills/incident",
+        ".claude/skills/spec",
+    };
+    for (skill_dirs) |dir| {
+        try mkdirSafe(allocator, cwd, dir);
+    }
+    try writeTemplate(allocator, cwd, ".claude/skills/adr/skill.md", templates.skill_adr, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/opportunity/skill.md", templates.skill_opp, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/incident/skill.md", templates.skill_inc, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/spec/skill.md", templates.skill_spec, name);
 
     // 5. Phoenix app (runs mix phx.new, but NOT deps.get yet)
     try initPhoenix(allocator, name);
@@ -202,6 +217,11 @@ fn createDirs(allocator: mem.Allocator, cwd: []const u8) !void {
         "docs/assets",
         ".explicit",
         ".claude",
+        ".claude/skills",
+        ".claude/skills/adr",
+        ".claude/skills/opportunity",
+        ".claude/skills/incident",
+        ".claude/skills/spec",
     };
 
     for (dirs) |dir| {
@@ -508,6 +528,8 @@ fn cmdDocs(allocator: mem.Allocator, sub1: ?[]const u8, sub2: ?[]const u8, json_
         }
     } else if (mem.eql(u8, subcmd, "diagnostics")) {
         try cmdSend(allocator, "{\"method\":\"doc.diagnostics\"}\n", json_output);
+    } else if (mem.eql(u8, subcmd, "lint")) {
+        try cmdSend(allocator, "{\"method\":\"doc.lint\"}\n", json_output);
     } else {
         stderr().print("Unknown docs command: {s}\n", .{subcmd}) catch {};
         process.exit(1);
@@ -534,6 +556,10 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
 
     if (mem.eql(u8, h, "stop")) {
         try hookClaudeStop(allocator);
+    } else if (mem.eql(u8, h, "check-fixme")) {
+        try hookCheckFixme(allocator);
+    } else if (mem.eql(u8, h, "check-code")) {
+        try hookCheckCode(allocator);
     } else {
         stderr().print("Unknown hook: {s}\n", .{h}) catch {};
         process.exit(1);
@@ -584,6 +610,37 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     }
 
     if (has_issues) process.exit(2);
+    process.exit(0);
+}
+
+/// Check for TBD/FIXME markers in docs — advisory warning (doesn't block)
+fn hookCheckFixme(allocator: mem.Allocator) !void {
+    const git_root = findGitRoot(allocator) catch { process.exit(0); };
+    defer allocator.free(git_root);
+    const sock_path = try socketPathForDir(allocator, git_root);
+    defer allocator.free(sock_path);
+
+    var stream = net.connectUnixSocket(sock_path) catch { process.exit(0); };
+    defer stream.close();
+    stream.writeAll("{\"method\":\"doc.check_fixme\"}\n") catch { process.exit(0); };
+
+    var buf: [65536]u8 = undefined;
+    const n = stream.read(&buf) catch { process.exit(0); };
+    if (n == 0) process.exit(0);
+
+    const response = buf[0..n];
+    if (mem.indexOf(u8, response, "\"total\":0") != null) process.exit(0);
+
+    // Advisory — output to stderr but don't block
+    stderr().writeAll(response) catch {};
+    process.exit(0);
+}
+
+/// Check if changed code files match doc code_paths — advisory
+fn hookCheckCode(allocator: mem.Allocator) !void {
+    // This hook receives the changed file path from Claude Code
+    // For now, just exit cleanly — full implementation needs stdin parsing
+    _ = allocator;
     process.exit(0);
 }
 
