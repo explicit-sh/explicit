@@ -1,0 +1,18 @@
+# Zig
+cli/.zig-cache/
+cli/zig-out/
+cli/explicit
+cli/main
+cli/main.o
+
+# Elixir
+server/_build/
+server/deps/
+server/.elixir_ls/
+
+# Devenv
+.devenv/
+.devenv.flake.nix
+
+# OS
+.DS_Store

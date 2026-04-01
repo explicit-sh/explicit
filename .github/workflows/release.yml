@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest # arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: '0.15.2'
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.20.0-rc.4'
+          otp-version: '28'
+
+      - name: Build CLI
+        run: |
+          cd cli
+          zig build-exe src/main.zig -target aarch64-macos.15.0-none -OReleaseSafe
+          mv main explicit
+
+      - name: Build server release
+        run: |
+          cd server
+          mix deps.get --only prod
+          MIX_ENV=prod mix release explicit_server --overwrite
+
+      - name: Create distribution tarball
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          mkdir -p dist/bin dist/lib dist/hooks
+
+          # CLI binary
+          cp cli/explicit dist/bin/
+
+          # Server release
+          tar xzf server/_build/prod/explicit_server-*.tar.gz -C dist/lib/
+
+          # Wrapper script for server
+          cat > dist/bin/explicit-server << 'WRAPPER'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          export RELEASE_ROOT="${SCRIPT_DIR}/../lib"
+          exec "${SCRIPT_DIR}/../lib/bin/explicit_server" "$@"
+          WRAPPER
+          chmod +x dist/bin/explicit-server
+
+          # Hook script
+          cp hooks/explicit-stop.sh dist/hooks/
+
+          # Create tarball
+          cd dist
+          tar czf "../explicit-${VERSION}-macos-arm64.tar.gz" .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: explicit-v*-macos-arm64.tar.gz
+          generate_release_notes: true
