@@ -19,8 +19,6 @@ MVP working end-to-end. Server boots, auto-finds git root, scans all .ex/.exs fi
 ### What's not done yet
 - Human-readable table output (currently prints raw JSON in non-json mode)
 - Tests for ViolationStore and Checker
-- Homebrew tap (`explicit-sh/homebrew-tap`) — formula ready, needs first release
-- `explicit-sh` GitHub org not created yet
 
 ## Installation
 
@@ -36,6 +34,9 @@ make build-server    # Elixir OTP release
 ## Quick Start
 
 ```bash
+# Initialize project (git, devenv, claude hooks)
+explicit init
+
 # Start server (finds git root, scans project, backgrounds as daemon)
 explicit watch
 
@@ -54,9 +55,11 @@ explicit stop
 cd server && mix deps.get && mix run --no-halt
 ```
 
-## Claude Code Hook
+## Claude Code Integration
 
-Add to `.claude/settings.json` to block Claude when violations exist:
+Run `explicit init` in your project to set up git, devenv, and Claude Code hooks automatically.
+
+Or manually add to `.claude/settings.json`:
 
 ```json
 {
@@ -64,12 +67,14 @@ Add to `.claude/settings.json` to block Claude when violations exist:
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/hooks/explicit-stop.sh"
+        "command": "explicit hooks claude stop"
       }]
     }]
   }
 }
 ```
+
+The stop hook blocks Claude when violations are found, forcing it to fix them.
 
 ## Building
 
@@ -98,15 +103,15 @@ Zig linker doesn't know macOS 26. CLI uses `-target aarch64-macos.15.0-none` via
 │  explicit   │   /tmp/explicit-   │  (ERTS bundled)          │
 │             │   {git_root_hash}  │                          │
 │ subcommands:│   .sock            │  ┌─ Application          │
-│  watch      │                    │  │  (finds git root)     │
-│  status     │   JSONL protocol   │  ├─ SocketServer         │
-│  violations │   (one JSON/line)  │  ├─ ConnectionHandler    │
-│  check      │                    │  ├─ Watcher (FileSystem) │
-│  stop       │                    │  ├─ Checker (Credo AST)  │
-│             │                    │  ├─ ViolationStore (ETS) │
-│ finds:      │                    │  └─ 6 Iron Law checks    │
-│  git root   │                    └──────────────────────────┘
-│  server bin │   Server binary searched in:
+│  init       │                    │  │  (finds git root)     │
+│  watch      │   JSONL protocol   │  ├─ SocketServer         │
+│  status     │   (one JSON/line)  │  ├─ ConnectionHandler    │
+│  violations │                    │  ├─ Watcher (FileSystem) │
+│  check      │                    │  ├─ Checker (Credo AST)  │
+│  stop       │                    │  ├─ ViolationStore (ETS) │
+│  hooks      │                    │  └─ 6 Iron Law checks    │
+│  claude     │                    └──────────────────────────┘
+│    stop     │   Server binary searched in:
 └─────────────┘   1. Same dir as CLI
                   2. ~/.explicit/explicit-server
                   3. $PATH
@@ -160,8 +165,7 @@ server/lib/explicit/
 ├── protocol.ex             # JSON encode/decode helpers
 └── checks/                 # 6 Credo AST checks
 
-cli/src/main.zig            # Zig CLI — thin client, spawns server
-hooks/explicit-stop.sh      # Claude Code Stop hook
+cli/src/main.zig            # Zig CLI — thin client, spawns server, hooks
 .github/workflows/release.yml  # CI: build + release
 ```
 

@@ -38,7 +38,7 @@ jobs:
       - name: Create distribution tarball
         run: |
           VERSION=${GITHUB_REF_NAME}
-          mkdir -p dist/bin dist/lib dist/hooks
+          mkdir -p dist/bin dist/lib
 
           # CLI binary
           cp cli/explicit dist/bin/
@@ -54,9 +54,6 @@ jobs:
           exec "${SCRIPT_DIR}/../lib/bin/explicit_server" "$@"
           WRAPPER
           chmod +x dist/bin/explicit-server
-
-          # Hook script
-          cp hooks/explicit-stop.sh dist/hooks/
 
           # Create tarball
           cd dist
