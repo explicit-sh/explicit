@@ -173,10 +173,43 @@ pub const tf_main =
     \\
 ;
 
-pub fn claudeMd(name: []const u8) []const u8 {
-    _ = name;
-    return claude_md_template;
-}
+pub const org_kdl =
+    \\// Organization registry for {NAME}
+    \\// Users referenced in doc frontmatter (author, owner) must exist here.
+    \\
+    \\org "{NAME}" {
+    \\  team "engineering" {
+    \\    // user "onni" name="Onni Hakala"
+    \\  }
+    \\}
+    \\
+;
+
+pub const docs_readme =
+    \\---
+    \\---
+    \\
+    \\# {NAME}
+    \\
+    \\## Architecture
+    \\
+    \\```mermaid
+    \\graph TD
+    \\    Client[Browser/Mobile] --> LB[Load Balancer]
+    \\    LB --> Phoenix[Phoenix App]
+    \\    Phoenix --> DB[(PostgreSQL)]
+    \\```
+    \\
+    \\## Risks
+    \\
+    \\> **Data Loss** — Ensure regular backups and test restore procedures.
+    \\
+    \\## License
+    \\
+    \\Proprietary. All rights reserved.
+    \\
+;
+
 
 pub const claude_md_template =
     \\# {NAME}

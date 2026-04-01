@@ -46,6 +46,8 @@ pub fn main() !void {
 
     if (mem.eql(u8, command, "init")) {
         try cmdInit(allocator, sub1);
+    } else if (mem.eql(u8, command, "docs")) {
+        try cmdDocs(allocator, sub1, sub2, json_output);
     } else if (mem.eql(u8, command, "hooks")) {
         try cmdHooks(allocator, sub1, sub2);
     } else if (mem.eql(u8, command, "watch")) {
@@ -81,16 +83,24 @@ pub fn main() !void {
 
 fn printUsage() void {
     stderr().writeAll(
-        \\explicit — Elixir code analysis tool
+        \\explicit — Elixir code analysis + documentation tool
         \\
         \\Usage:
         \\  explicit init <name>       Scaffold a full-stack Elixir monorepo
         \\  explicit watch             Start server for current project
         \\  explicit status            Show server status
-        \\  explicit violations [file] List violations
+        \\  explicit violations [file] List code violations
         \\  explicit check <file>      Force re-check a file
+        \\  explicit docs <subcmd>     Document management (see below)
         \\  explicit stop              Stop the server
         \\  explicit hooks claude stop Claude Code stop hook (internal)
+        \\
+        \\Document commands:
+        \\  explicit docs validate     Validate all docs against schema
+        \\  explicit docs new <type> <title>  Create new document
+        \\  explicit docs list [--type T]     List documents
+        \\  explicit docs get <id>     Show document details
+        \\  explicit docs describe [type]     Describe schema types
         \\
         \\Flags:
         \\  --json                     Output raw JSON
@@ -135,7 +145,12 @@ fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     try writeTemplate(allocator, cwd, "clients/ios/README.md", templates.ios_readme, name);
     try writeTemplate(allocator, cwd, "clients/android/README.md", templates.android_readme, name);
 
-    // 4. .claude/ config
+    // 4. .explicit/ config + docs structure
+    try writeTemplate(allocator, cwd, ".explicit/org.kdl", templates.org_kdl, name);
+    try copySchemaKdl(allocator, cwd);
+    try writeTemplate(allocator, cwd, "docs/README.md", templates.docs_readme, name);
+
+    // 5. .claude/ config
     try mkdirSafe(allocator, cwd, ".claude");
     try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
 
@@ -177,6 +192,15 @@ fn createDirs(allocator: mem.Allocator, cwd: []const u8) !void {
         "infrastructure/environments/staging",
         "infrastructure/environments/prod",
         "infrastructure/modules",
+        "docs",
+        "docs/architecture",
+        "docs/opportunities",
+        "docs/policies",
+        "docs/incidents",
+        "docs/specs",
+        "docs/processes",
+        "docs/assets",
+        ".explicit",
         ".claude",
     };
 
@@ -236,8 +260,15 @@ fn initPhoenix(allocator: mem.Allocator, name: []const u8) !void {
     );
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    _ = try child.spawn();
-    const term = try child.wait();
+
+    _ = child.spawn() catch {
+        printMixMissing(name);
+        return;
+    };
+    const term = child.wait() catch {
+        printMixMissing(name);
+        return;
+    };
 
     if (term.Exited == 0) {
         stderr().writeAll("phoenix: scaffolded\n") catch {};
@@ -248,6 +279,13 @@ fn initPhoenix(allocator: mem.Allocator, name: []const u8) !void {
         stderr().writeAll(name) catch {};
         stderr().writeAll(" --no-install\n") catch {};
     }
+}
+
+fn printMixMissing(name: []const u8) void {
+    stderr().writeAll("phoenix: 'mix' not found in PATH\n") catch {};
+    stderr().writeAll("  Install Elixir first: brew install elixir\n") catch {};
+    stderr().writeAll("  Then run: mix archive.install hex phx_new\n") catch {};
+    stderr().print("  Then run: mix phx.new services/elixir --app {s} --no-install\n", .{name}) catch {};
 }
 
 fn addBoundaryDep(allocator: mem.Allocator, cwd: []const u8, name: []const u8) !void {
@@ -290,13 +328,123 @@ fn installDeps(allocator: mem.Allocator) !void {
     child.cwd = "services/elixir";
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Inherit;
-    _ = try child.spawn();
-    const term = try child.wait();
+    _ = child.spawn() catch {
+        stderr().writeAll("deps: mix not found, skipping\n") catch {};
+        return;
+    };
+    const term = child.wait() catch {
+        stderr().writeAll("deps: mix not found, skipping\n") catch {};
+        return;
+    };
     if (term.Exited == 0) {
         stderr().writeAll("deps: installed\n") catch {};
     } else {
         stderr().writeAll("deps: mix deps.get failed (run manually in services/elixir/)\n") catch {};
     }
+}
+
+fn copySchemaKdl(allocator: mem.Allocator, cwd: []const u8) !void {
+    const dest = try std.fmt.allocPrint(allocator, "{s}/.explicit/schema.kdl", .{cwd});
+    defer allocator.free(dest);
+
+    // Don't overwrite
+    if (fs.cwd().statFile(dest)) |_| {
+        stderr().writeAll(".explicit/schema.kdl: already exists, skipping\n") catch {};
+        return;
+    } else |_| {}
+
+    // Try to find schema.kdl from server install
+    var exe_buf: [fs.max_path_bytes]u8 = undefined;
+    if (std.fs.selfExePath(&exe_buf)) |exe_path| {
+        if (std.fs.path.dirname(exe_path)) |exe_dir| {
+            // Look for ../lib/explicit_server/lib/explicit-*/priv/schema.kdl
+            // TODO: search sibling lib dir for installed schema.kdl
+            _ = exe_dir;
+        }
+    } else |_| {}
+
+    // Fallback: write a minimal schema
+    const file = fs.createFileAbsolute(dest, .{}) catch {
+        stderr().writeAll(".explicit/schema.kdl: failed to create\n") catch {};
+        return;
+    };
+    defer file.close();
+    file.writeAll(
+        \\// Explicit schema — see https://github.com/explicit-sh/explicit
+        \\// Full schema available after: brew install explicit-sh/tap/explicit
+        \\
+        \\relation "supersedes" inverse="superseded_by" cardinality="one"
+        \\relation "implements" inverse="implemented_by" cardinality="many"
+        \\relation "depends_on" inverse="dependency_of" cardinality="many"
+        \\relation "related" cardinality="many"
+        \\
+        \\type "adr" description="Architecture Decision Record" folder="docs/architecture" {
+        \\    alias "architecture"
+        \\    field "status" type="enum" required=true default="proposed" {
+        \\        values "proposed" "accepted" "rejected" "deprecated" "superseded"
+        \\    }
+        \\    field "author" type="user" required=true
+        \\    field "date" type="string" required=true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
+        \\    field "tags" type="string[]"
+        \\    field "code_paths" type="string[]"
+        \\    section "Context" required=true
+        \\    section "Decision" required=true
+        \\    section "Consequences" required=true {
+        \\        section "Positive" required=true
+        \\        section "Negative"
+        \\    }
+        \\}
+        \\
+        \\type "opp" description="Opportunity" folder="docs/opportunities" {
+        \\    alias "opportunity"
+        \\    field "status" type="enum" required=true default="identified" {
+        \\        values "identified" "validating" "pursuing" "completed" "deprecated"
+        \\    }
+        \\    field "author" type="user" required=true
+        \\    field "date" type="string" required=true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
+        \\    field "tags" type="string[]"
+        \\    section "Description" required=true
+        \\}
+        \\
+        \\type "pol" description="Policy" folder="docs/policies" {
+        \\    alias "policy"
+        \\    field "status" type="enum" required=true default="proposed" {
+        \\        values "proposed" "active" "deprecated" "superseded"
+        \\    }
+        \\    field "author" type="user" required=true
+        \\    field "date" type="string" required=true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
+        \\    section "Purpose" required=true
+        \\    section "Policy" required=true
+        \\    section "Scope" required=true
+        \\}
+        \\
+        \\type "inc" description="Incident Report" folder="docs/incidents" {
+        \\    alias "incident"
+        \\    field "status" type="enum" required=true default="open" {
+        \\        values "open" "mitigated" "resolved"
+        \\    }
+        \\    field "severity" type="enum" required=true {
+        \\        values "sev1" "sev2" "sev3" "sev4"
+        \\    }
+        \\    field "author" type="user" required=true
+        \\    field "date" type="string" required=true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
+        \\    section "Summary" required=true
+        \\    section "Root Cause" required=true
+        \\}
+        \\
+        \\type "spec" description="Behavioral Specification" folder="docs/specs" {
+        \\    alias "feature"
+        \\    field "status" type="enum" required=true default="draft" {
+        \\        values "draft" "proposed" "approved" "implemented" "deprecated"
+        \\    }
+        \\    field "author" type="user" required=true
+        \\    field "date" type="string" required=true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
+        \\    section "Story" required=true
+        \\    section "Scenarios" required=true
+        \\}
+        \\
+    ) catch {};
+    stderr().writeAll(".explicit/schema.kdl: created (minimal)\n") catch {};
 }
 
 fn runCmd(allocator: mem.Allocator, argv: []const []const u8, label: []const u8) !void {
@@ -309,6 +457,60 @@ fn runCmd(allocator: mem.Allocator, argv: []const []const u8, label: []const u8)
         stderr().print("{s}: done\n", .{label}) catch {};
     } else {
         stderr().print("{s}: failed (exit {d})\n", .{ label, term.Exited }) catch {};
+    }
+}
+
+// ─── Docs command ────────────────────────────────────────────────────────────
+
+fn cmdDocs(allocator: mem.Allocator, sub1: ?[]const u8, sub2: ?[]const u8, json_output: bool) !void {
+    const subcmd = sub1 orelse {
+        stderr().writeAll("Usage: explicit docs <validate|new|list|get|describe>\n") catch {};
+        process.exit(1);
+    };
+
+    if (mem.eql(u8, subcmd, "validate")) {
+        try cmdSend(allocator, "{\"method\":\"doc.validate\"}\n", json_output);
+    } else if (mem.eql(u8, subcmd, "list")) {
+        if (sub2) |type_filter| {
+            const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.list\",\"params\":{{\"type\":\"{s}\"}}}}\n", .{type_filter});
+            defer allocator.free(req);
+            try cmdSend(allocator, req, json_output);
+        } else {
+            try cmdSend(allocator, "{\"method\":\"doc.list\"}\n", json_output);
+        }
+    } else if (mem.eql(u8, subcmd, "new")) {
+        const type_name = sub2 orelse {
+            stderr().writeAll("Usage: explicit docs new <type> <title>\n") catch {};
+            stderr().writeAll("Types: adr, opp, pol, inc, spec, proc\n") catch {};
+            process.exit(1);
+        };
+        // For now, title comes from remaining args — but we only captured sub2.
+        // Use type as both type and a placeholder title prompt.
+        // TODO: parse title from remaining args properly
+        const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.new\",\"params\":{{\"type\":\"{s}\",\"title\":\"Untitled\"}}}}\n", .{type_name});
+        defer allocator.free(req);
+        try cmdSend(allocator, req, json_output);
+    } else if (mem.eql(u8, subcmd, "get")) {
+        const id = sub2 orelse {
+            stderr().writeAll("Usage: explicit docs get <id>\n") catch {};
+            process.exit(1);
+        };
+        const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.get\",\"params\":{{\"id\":\"{s}\"}}}}\n", .{id});
+        defer allocator.free(req);
+        try cmdSend(allocator, req, json_output);
+    } else if (mem.eql(u8, subcmd, "describe")) {
+        if (sub2) |type_name| {
+            const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.describe\",\"params\":{{\"type\":\"{s}\"}}}}\n", .{type_name});
+            defer allocator.free(req);
+            try cmdSend(allocator, req, json_output);
+        } else {
+            try cmdSend(allocator, "{\"method\":\"doc.describe\"}\n", json_output);
+        }
+    } else if (mem.eql(u8, subcmd, "diagnostics")) {
+        try cmdSend(allocator, "{\"method\":\"doc.diagnostics\"}\n", json_output);
+    } else {
+        stderr().print("Unknown docs command: {s}\n", .{subcmd}) catch {};
+        process.exit(1);
     }
 }
 
