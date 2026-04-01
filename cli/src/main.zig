@@ -139,14 +139,17 @@ fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     try mkdirSafe(allocator, cwd, ".claude");
     try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
 
-    // 5. Phoenix app
+    // 5. Phoenix app (runs mix phx.new, but NOT deps.get yet)
     try initPhoenix(allocator, name);
 
     // 6. .credo.exs inside services/elixir
     try writeTemplate(allocator, cwd, "services/elixir/.credo.exs", templates.credo_exs, name);
 
-    // 7. Add boundary dep to mix.exs
+    // 7. Add boundary dep to mix.exs (before deps.get)
     try addBoundaryDep(allocator, cwd, name);
+
+    // 8. Install deps (after all mix.exs modifications)
+    try installDeps(allocator);
 
     stderr().writeAll(
         \\
@@ -238,21 +241,6 @@ fn initPhoenix(allocator: mem.Allocator, name: []const u8) !void {
 
     if (term.Exited == 0) {
         stderr().writeAll("phoenix: scaffolded\n") catch {};
-
-        // Run mix deps.get
-        stderr().writeAll("phoenix: installing deps...\n") catch {};
-        var deps = std.process.Child.init(
-            &.{ "mix", "deps.get" },
-            allocator,
-        );
-        deps.cwd = "services/elixir";
-        deps.stdout_behavior = .Ignore;
-        deps.stderr_behavior = .Inherit;
-        _ = try deps.spawn();
-        const deps_term = try deps.wait();
-        if (deps_term.Exited == 0) {
-            stderr().writeAll("phoenix: deps installed\n") catch {};
-        }
     } else {
         stderr().writeAll("phoenix: mix phx.new failed\n") catch {};
         stderr().writeAll("  Install Phoenix: mix archive.install hex phx_new\n") catch {};
@@ -290,6 +278,24 @@ fn addBoundaryDep(allocator: mem.Allocator, cwd: []const u8, name: []const u8) !
         stderr().writeAll("boundary: added to mix.exs\n") catch {};
     } else {
         stderr().writeAll("boundary: couldn't find deps list, add {:boundary, \"~> 0.10\"} manually\n") catch {};
+    }
+}
+
+fn installDeps(allocator: mem.Allocator) !void {
+    stderr().writeAll("deps: installing...\n") catch {};
+    var child = std.process.Child.init(
+        &.{ "mix", "deps.get" },
+        allocator,
+    );
+    child.cwd = "services/elixir";
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Inherit;
+    _ = try child.spawn();
+    const term = try child.wait();
+    if (term.Exited == 0) {
+        stderr().writeAll("deps: installed\n") catch {};
+    } else {
+        stderr().writeAll("deps: mix deps.get failed (run manually in services/elixir/)\n") catch {};
     }
 }
 
