@@ -3,6 +3,7 @@ const fs = std.fs;
 const net = std.net;
 const mem = std.mem;
 const process = std.process;
+const templates = @import("templates.zig");
 
 fn stderr() fs.File.DeprecatedWriter {
     return fs.File.stderr().deprecatedWriter();
@@ -37,17 +38,14 @@ pub fn main() !void {
         if (mem.eql(u8, arg, "--json")) {
             json_output = true;
         } else {
-            if (sub1 == null) {
-                sub1 = arg;
-            } else if (sub2 == null) {
-                sub2 = arg;
-            }
+            if (sub1 == null) sub1 = arg;
+            if (sub2 == null and sub1 != null and !mem.eql(u8, arg, sub1.?)) sub2 = arg;
             if (file_arg == null) file_arg = arg;
         }
     }
 
     if (mem.eql(u8, command, "init")) {
-        try cmdInit(allocator);
+        try cmdInit(allocator, sub1);
     } else if (mem.eql(u8, command, "hooks")) {
         try cmdHooks(allocator, sub1, sub2);
     } else if (mem.eql(u8, command, "watch")) {
@@ -86,191 +84,226 @@ fn printUsage() void {
         \\explicit — Elixir code analysis tool
         \\
         \\Usage:
-        \\  explicit init              Initialize project (git, devenv, claude hooks)
-        \\  explicit watch             Start server for current project (finds git root)
+        \\  explicit init <name>       Scaffold a full-stack Elixir monorepo
+        \\  explicit watch             Start server for current project
         \\  explicit status            Show server status
-        \\  explicit violations [file] List violations (optionally for one file)
+        \\  explicit violations [file] List violations
         \\  explicit check <file>      Force re-check a file
         \\  explicit stop              Stop the server
-        \\  explicit hooks claude stop Claude Code stop hook (used internally)
+        \\  explicit hooks claude stop Claude Code stop hook (internal)
         \\
         \\Flags:
-        \\  --json                     Output raw JSON (machine-readable)
+        \\  --json                     Output raw JSON
         \\
     ) catch {};
 }
 
 // ─── Init command ────────────────────────────────────────────────────────────
 
-fn cmdInit(allocator: mem.Allocator) !void {
+fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
+    const name = name_arg orelse {
+        try stderr().writeAll("Usage: explicit init <project_name>\n");
+        try stderr().writeAll("Example: explicit init my_app\n");
+        process.exit(1);
+    };
+
+    // Validate name (must be valid Elixir module name)
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') {
+            stderr().print("Error: '{s}' is not a valid project name (use snake_case)\n", .{name}) catch {};
+            process.exit(1);
+        }
+    }
+
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&path_buf);
 
-    // 1. git init
-    try initGit(allocator, cwd);
+    stderr().print("Initializing {s} monorepo...\n\n", .{name}) catch {};
 
-    // 2. devenv init
-    try initDevenv(allocator, cwd);
+    // 1. Create directory structure
+    try createDirs(allocator, cwd);
 
-    // 3. .claude/ config
-    try initClaude(allocator, cwd);
+    // 2. git init
+    try runCmd(allocator, &.{ "git", "init" }, "git");
 
-    stderr().writeAll("\nDone! Run 'explicit watch' to start the server.\n") catch {};
+    // 3. Write template files
+    try writeTemplate(allocator, cwd, ".gitignore", templates.gitignore, name);
+    try writeTemplate(allocator, cwd, "devenv.nix", templates.devenv_nix, name);
+    try writeTemplate(allocator, cwd, "Makefile", templates.makefile, name);
+    try writeTemplate(allocator, cwd, "CLAUDE.md", templates.claude_md_template, name);
+    try writeTemplate(allocator, cwd, "infrastructure/environments/dev/main.tf", templates.tf_main, name);
+    try writeTemplate(allocator, cwd, "clients/ios/README.md", templates.ios_readme, name);
+    try writeTemplate(allocator, cwd, "clients/android/README.md", templates.android_readme, name);
+
+    // 4. .claude/ config
+    try mkdirSafe(allocator, cwd, ".claude");
+    try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
+
+    // 5. Phoenix app
+    try initPhoenix(allocator, name);
+
+    // 6. .credo.exs inside services/elixir
+    try writeTemplate(allocator, cwd, "services/elixir/.credo.exs", templates.credo_exs, name);
+
+    // 7. Add boundary dep to mix.exs
+    try addBoundaryDep(allocator, cwd, name);
+
+    stderr().writeAll(
+        \\
+        \\Done! Next steps:
+        \\
+        \\  1. cd into the project directory
+        \\  2. devenv shell           # Enter dev environment
+        \\  3. make setup             # Install deps + create DB
+        \\  4. make dev               # Start Phoenix server
+        \\  5. explicit watch         # Start code analysis server
+        \\
+    ) catch {};
 }
 
-fn initGit(allocator: mem.Allocator, cwd: []const u8) !void {
-    const git_dir = try std.fmt.allocPrint(allocator, "{s}/.git", .{cwd});
-    defer allocator.free(git_dir);
-
-    // Check if .git dir exists using access
-    if (fs.accessAbsolute(git_dir, .{})) {
-        stderr().writeAll("git: already initialized\n") catch {};
-    } else |_| {
-        stderr().writeAll("git: initializing...\n") catch {};
-        var child = std.process.Child.init(&.{ "git", "init" }, allocator);
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        _ = try child.spawn();
-        const term = try child.wait();
-        if (term.Exited == 0) {
-            stderr().writeAll("git: initialized\n") catch {};
-        } else {
-            stderr().writeAll("git: init failed\n") catch {};
-        }
-    }
-}
-
-fn initDevenv(allocator: mem.Allocator, cwd: []const u8) !void {
-    const devenv_path = try std.fmt.allocPrint(allocator, "{s}/devenv.nix", .{cwd});
-    defer allocator.free(devenv_path);
-
-    if (fs.cwd().statFile(devenv_path)) |_| {
-        stderr().writeAll("devenv: already initialized\n") catch {};
-    } else |_| {
-        stderr().writeAll("devenv: initializing...\n") catch {};
-        var child = std.process.Child.init(&.{ "devenv", "init" }, allocator);
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        _ = try child.spawn();
-        const term = try child.wait();
-        if (term.Exited == 0) {
-            stderr().writeAll("devenv: initialized\n") catch {};
-        } else {
-            stderr().writeAll("devenv: init failed (is devenv installed?)\n") catch {};
-        }
-    }
-}
-
-fn initClaude(allocator: mem.Allocator, cwd: []const u8) !void {
-    // Find path to this binary for hook command
-    var exe_buf: [fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.selfExePath(&exe_buf) catch cwd;
-    _ = exe_path;
-
-    const claude_dir = try std.fmt.allocPrint(allocator, "{s}/.claude", .{cwd});
-    defer allocator.free(claude_dir);
-
-    // Create .claude/ dir
-    fs.cwd().makeDir(claude_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
+fn createDirs(allocator: mem.Allocator, cwd: []const u8) !void {
+    const dirs = [_][]const u8{
+        "services",
+        "services/elixir",
+        "clients",
+        "clients/ios",
+        "clients/android",
+        "infrastructure",
+        "infrastructure/environments",
+        "infrastructure/environments/dev",
+        "infrastructure/environments/staging",
+        "infrastructure/environments/prod",
+        "infrastructure/modules",
+        ".claude",
     };
 
-    const settings_path = try std.fmt.allocPrint(allocator, "{s}/.claude/settings.json", .{cwd});
-    defer allocator.free(settings_path);
+    for (dirs) |dir| {
+        const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ cwd, dir });
+        defer allocator.free(full);
+        fs.makeDirAbsolute(full) catch {};
+    }
+    stderr().writeAll("dirs: created project structure\n") catch {};
+}
 
-    // Check if settings.json already exists
-    if (fs.cwd().statFile(settings_path)) |_| {
-        // File exists — check if hook already configured
-        const existing = fs.cwd().readFileAlloc(allocator, settings_path, 1024 * 1024) catch {
-            stderr().writeAll("claude: settings.json exists but couldn't read it\n") catch {};
-            return;
-        };
-        defer allocator.free(existing);
+fn mkdirSafe(allocator: mem.Allocator, cwd: []const u8, rel: []const u8) !void {
+    const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ cwd, rel });
+    defer allocator.free(full);
+    fs.makeDirAbsolute(full) catch {};
+}
 
-        if (mem.indexOf(u8, existing, "explicit hooks claude stop") != null) {
-            stderr().writeAll("claude: hooks already configured\n") catch {};
-            return;
-        }
+fn writeTemplate(allocator: mem.Allocator, cwd: []const u8, rel_path: []const u8, template: []const u8, name: []const u8) !void {
+    const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ cwd, rel_path });
+    defer allocator.free(full);
 
-        stderr().writeAll("claude: settings.json exists but missing explicit hook\n") catch {};
-        stderr().writeAll("claude: add this to .claude/settings.json manually:\n") catch {};
-        printHookConfig();
+    // Don't overwrite existing files
+    if (fs.cwd().statFile(full)) |_| {
+        stderr().print("{s}: already exists, skipping\n", .{rel_path}) catch {};
         return;
     } else |_| {}
 
-    // Create settings.json with hook config
-    const settings_content =
-        \\{
-        \\  "hooks": {
-        \\    "Stop": [
-        \\      {
-        \\        "hooks": [
-        \\          {
-        \\            "type": "command",
-        \\            "command": "explicit hooks claude stop"
-        \\          }
-        \\        ]
-        \\      }
-        \\    ]
-        \\  }
-        \\}
-        \\
-    ;
+    // Replace {NAME} placeholder with actual name
+    const content = try std.mem.replaceOwned(u8, allocator, template, "{NAME}", name);
+    defer allocator.free(content);
 
-    const file = try fs.cwd().createFile(settings_path, .{});
+    // Ensure parent dir exists
+    if (std.fs.path.dirname(full)) |parent| {
+        fs.makeDirAbsolute(parent) catch {};
+    }
+
+    const file = try fs.createFileAbsolute(full, .{});
     defer file.close();
-    try file.writeAll(settings_content);
+    try file.writeAll(content);
 
-    stderr().writeAll("claude: created .claude/settings.json with stop hook\n") catch {};
+    stderr().print("{s}: created\n", .{rel_path}) catch {};
+}
 
-    // Create CLAUDE.md if it doesn't exist
-    const claude_md_path = try std.fmt.allocPrint(allocator, "{s}/CLAUDE.md", .{cwd});
-    defer allocator.free(claude_md_path);
+fn initPhoenix(allocator: mem.Allocator, name: []const u8) !void {
+    // Check if Phoenix already scaffolded
+    if (fs.cwd().statFile("services/elixir/mix.exs")) |_| {
+        stderr().writeAll("phoenix: services/elixir/mix.exs exists, skipping\n") catch {};
+        return;
+    } else |_| {}
 
-    if (fs.cwd().statFile(claude_md_path)) |_| {
-        // Already exists
-    } else |_| {
-        const claude_md = try fs.cwd().createFile(claude_md_path, .{});
-        defer claude_md.close();
-        try claude_md.writeAll(
-            \\# Project Instructions
-            \\
-            \\## Code Quality
-            \\
-            \\This project uses [explicit](https://github.com/explicit-sh/explicit) for real-time code analysis.
-            \\The server watches for file changes and checks Elixir code against Iron Law rules.
-            \\
-            \\A Claude Code stop hook is configured — if violations are found after your response,
-            \\you'll be asked to fix them before proceeding.
-            \\
-            \\```bash
-            \\explicit violations --json  # Check current violations
-            \\explicit check <file>       # Re-check a specific file
-            \\```
-            \\
+    // Try running mix phx.new
+    stderr().writeAll("phoenix: scaffolding with mix phx.new...\n") catch {};
+
+    var child = std.process.Child.init(
+        &.{ "mix", "phx.new", "services/elixir", "--app", name, "--no-install" },
+        allocator,
+    );
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    _ = try child.spawn();
+    const term = try child.wait();
+
+    if (term.Exited == 0) {
+        stderr().writeAll("phoenix: scaffolded\n") catch {};
+
+        // Run mix deps.get
+        stderr().writeAll("phoenix: installing deps...\n") catch {};
+        var deps = std.process.Child.init(
+            &.{ "mix", "deps.get" },
+            allocator,
         );
-        stderr().writeAll("claude: created CLAUDE.md\n") catch {};
+        deps.cwd = "services/elixir";
+        deps.stdout_behavior = .Ignore;
+        deps.stderr_behavior = .Inherit;
+        _ = try deps.spawn();
+        const deps_term = try deps.wait();
+        if (deps_term.Exited == 0) {
+            stderr().writeAll("phoenix: deps installed\n") catch {};
+        }
+    } else {
+        stderr().writeAll("phoenix: mix phx.new failed\n") catch {};
+        stderr().writeAll("  Install Phoenix: mix archive.install hex phx_new\n") catch {};
+        stderr().writeAll("  Then run: mix phx.new services/elixir --app ") catch {};
+        stderr().writeAll(name) catch {};
+        stderr().writeAll(" --no-install\n") catch {};
     }
 }
 
-fn printHookConfig() void {
-    stderr().writeAll(
-        \\
-        \\  "hooks": {
-        \\    "Stop": [
-        \\      {
-        \\        "hooks": [
-        \\          {
-        \\            "type": "command",
-        \\            "command": "explicit hooks claude stop"
-        \\          }
-        \\        ]
-        \\      }
-        \\    ]
-        \\  }
-        \\
-    ) catch {};
+fn addBoundaryDep(allocator: mem.Allocator, cwd: []const u8, name: []const u8) !void {
+    _ = name;
+    const mix_path = try std.fmt.allocPrint(allocator, "{s}/services/elixir/mix.exs", .{cwd});
+    defer allocator.free(mix_path);
+
+    const content = fs.cwd().readFileAlloc(allocator, mix_path, 1024 * 1024) catch {
+        stderr().writeAll("boundary: no mix.exs found, skipping\n") catch {};
+        return;
+    };
+    defer allocator.free(content);
+
+    // Check if boundary already added
+    if (mem.indexOf(u8, content, "boundary") != null) {
+        stderr().writeAll("boundary: already in mix.exs\n") catch {};
+        return;
+    }
+
+    // Find the deps list and inject boundary
+    if (mem.indexOf(u8, content, "{:phoenix,")) |pos| {
+        const new_content = try std.fmt.allocPrint(allocator, "{s}{{:boundary, \"~> 0.10\"}},\n      {s}", .{ content[0..pos], content[pos..] });
+        defer allocator.free(new_content);
+
+        const file = try fs.createFileAbsolute(mix_path, .{});
+        defer file.close();
+        try file.writeAll(new_content);
+        stderr().writeAll("boundary: added to mix.exs\n") catch {};
+    } else {
+        stderr().writeAll("boundary: couldn't find deps list, add {:boundary, \"~> 0.10\"} manually\n") catch {};
+    }
+}
+
+fn runCmd(allocator: mem.Allocator, argv: []const []const u8, label: []const u8) !void {
+    var child = std.process.Child.init(argv, allocator);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    _ = try child.spawn();
+    const term = try child.wait();
+    if (term.Exited == 0) {
+        stderr().print("{s}: done\n", .{label}) catch {};
+    } else {
+        stderr().print("{s}: failed (exit {d})\n", .{ label, term.Exited }) catch {};
+    }
 }
 
 // ─── Hooks command ───────────────────────────────────────────────────────────
@@ -299,10 +332,8 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
     }
 }
 
-/// Claude Code Stop hook: check violations, exit 2 to block if any found
 fn hookClaudeStop(allocator: mem.Allocator) !void {
     const git_root = findGitRoot(allocator) catch {
-        // Not in a git repo — nothing to check
         process.exit(0);
     };
     defer allocator.free(git_root);
@@ -310,13 +341,11 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
-    // Connect to server — if not running, silently pass
     var stream = net.connectUnixSocket(sock_path) catch {
         process.exit(0);
     };
     defer stream.close();
 
-    // Request violations
     stream.writeAll("{\"method\":\"violations\"}\n") catch {
         process.exit(0);
     };
@@ -330,20 +359,16 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 
     const response = buf[0..n];
 
-    // Check if there are violations (total > 0)
-    // Look for "total":0 — if found, no violations
     if (mem.indexOf(u8, response, "\"total\":0") != null) {
         process.exit(0);
     }
 
-    // Has violations — output to stderr and exit 2 to block
     stderr().writeAll(response) catch {};
     process.exit(2);
 }
 
 // ─── Socket/server helpers ───────────────────────────────────────────────────
 
-/// Find git root by traversing up from CWD.
 fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&path_buf);
@@ -354,7 +379,7 @@ fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
         const git_path = try std.fmt.allocPrint(allocator, "{s}/.git", .{dir});
         defer allocator.free(git_path);
 
-        if (fs.cwd().statFile(git_path)) |_| {
+        if (fs.accessAbsolute(git_path, .{})) {
             return dir;
         } else |_| {}
 
@@ -373,7 +398,6 @@ fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
     }
 }
 
-/// Compute socket path from git root: /tmp/explicit-{md5_first_8hex}.sock
 fn socketPathForDir(allocator: mem.Allocator, dir: []const u8) ![]const u8 {
     const Md5 = std.crypto.hash.Md5;
     var hash: [Md5.digest_length]u8 = undefined;
@@ -440,10 +464,6 @@ fn printHuman(writer: anytype, response: []const u8) !void {
     }
 }
 
-/// Find the explicit-server binary. Search order:
-/// 1. Same directory as this CLI binary
-/// 2. ~/.explicit/explicit-server
-/// 3. PATH
 fn findServerBinary(allocator: mem.Allocator) !?[]const u8 {
     var exe_buf: [fs.max_path_bytes]u8 = undefined;
     if (std.fs.selfExePath(&exe_buf)) |exe_path| {
