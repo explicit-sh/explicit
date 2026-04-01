@@ -347,30 +347,42 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
-    var stream = net.connectUnixSocket(sock_path) catch {
-        process.exit(0);
-    };
-    defer stream.close();
+    var has_issues = false;
 
-    stream.writeAll("{\"method\":\"violations\"}\n") catch {
-        process.exit(0);
-    };
-
-    var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch {
-        process.exit(0);
-    };
-
-    if (n == 0) process.exit(0);
-
-    const response = buf[0..n];
-
-    if (mem.indexOf(u8, response, "\"total\":0") != null) {
-        process.exit(0);
+    // Check code violations
+    {
+        var stream = net.connectUnixSocket(sock_path) catch { process.exit(0); };
+        defer stream.close();
+        stream.writeAll("{\"method\":\"violations\"}\n") catch { process.exit(0); };
+        var buf: [65536]u8 = undefined;
+        const n = stream.read(&buf) catch { process.exit(0); };
+        if (n > 0) {
+            const response = buf[0..n];
+            if (mem.indexOf(u8, response, "\"total\":0") == null) {
+                stderr().writeAll(response) catch {};
+                has_issues = true;
+            }
+        }
     }
 
-    stderr().writeAll(response) catch {};
-    process.exit(2);
+    // Check doc diagnostics
+    {
+        var stream = net.connectUnixSocket(sock_path) catch { process.exit(0); };
+        defer stream.close();
+        stream.writeAll("{\"method\":\"doc.diagnostics\"}\n") catch { process.exit(0); };
+        var buf: [65536]u8 = undefined;
+        const n = stream.read(&buf) catch { process.exit(0); };
+        if (n > 0) {
+            const response = buf[0..n];
+            if (mem.indexOf(u8, response, "\"errors\":0") == null) {
+                stderr().writeAll(response) catch {};
+                has_issues = true;
+            }
+        }
+    }
+
+    if (has_issues) process.exit(2);
+    process.exit(0);
 }
 
 // ─── Socket/server helpers ───────────────────────────────────────────────────

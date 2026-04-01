@@ -47,7 +47,7 @@ defmodule Explicit.Watcher do
   end
 
   def handle_info({:file_event, _pid, {path, _events}}, state) do
-    if elixir_file?(path) and not ignored?(path) do
+    if watched_file?(path) and not ignored?(path) do
       pending = MapSet.put(state.pending_files, to_string(path))
 
       timer =
@@ -72,21 +72,51 @@ defmodule Explicit.Watcher do
   def handle_info(:flush, state) do
     for file <- state.pending_files do
       if File.exists?(file) do
+        check_file(file)
+      else
+        # File deleted
+        Explicit.ViolationStore.put(file, [])
+        Explicit.DocStore.put(file, [])
+      end
+    end
+
+    {:noreply, %{state | pending_files: MapSet.new(), debounce_timer: nil}}
+  end
+
+  defp check_file(file) do
+    cond do
+      elixir_file?(file) ->
         case Explicit.Checker.check_and_store(file) do
           {:ok, violations} ->
             if violations != [] do
               Logger.info("#{length(violations)} violation(s) in #{Path.basename(file)}")
             end
-
           {:error, msg} ->
             Logger.warning("Check failed for #{file}: #{msg}")
         end
-      else
-        Explicit.ViolationStore.put(file, [])
-      end
-    end
 
-    {:noreply, %{state | pending_files: MapSet.new(), debounce_timer: nil}}
+      doc_file?(file) ->
+        check_doc(file)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp check_doc(file) do
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+
+    with {:ok, doc} <- Explicit.Doc.Document.parse_file(file),
+         {:ok, diagnostics} <- Explicit.Doc.Validation.validate(doc, schema) do
+      Explicit.DocStore.put(file, diagnostics)
+      errors = Enum.count(diagnostics, fn {level, _, _} -> level == :error end)
+      if errors > 0 do
+        Logger.info("#{errors} doc error(s) in #{Path.basename(file)}")
+      end
+    else
+      {:error, msg} ->
+        Logger.warning("Doc check failed for #{file}: #{msg}")
+    end
   end
 
   defp start_watching(dir, state) do
@@ -111,20 +141,36 @@ defmodule Explicit.Watcher do
 
   defp scan_directory(dir) do
     Task.start(fn ->
+      # Scan Elixir files
       dir
       |> Path.join("**/*.{ex,exs}")
       |> Path.wildcard()
       |> Enum.reject(&ignored?/1)
       |> Enum.each(&Explicit.Checker.check_and_store/1)
 
-      summary = Explicit.ViolationStore.summary()
-      Logger.info("Initial scan: #{summary.files} files, #{summary.total} violation(s)")
+      # Scan doc files
+      schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+      Explicit.Doc.Discovery.discover(dir, schema)
+      |> Enum.each(&check_doc/1)
+
+      code_summary = Explicit.ViolationStore.summary()
+      doc_summary = Explicit.DocStore.summary()
+      Logger.info("Initial scan: #{code_summary.files} code files (#{code_summary.total} violations), #{doc_summary.files} docs (#{doc_summary.errors} errors)")
     end)
+  end
+
+  defp watched_file?(path) do
+    elixir_file?(path) or doc_file?(path)
   end
 
   defp elixir_file?(path) do
     ext = Path.extname(to_string(path))
     ext in [".ex", ".exs"]
+  end
+
+  defp doc_file?(path) do
+    ext = Path.extname(to_string(path))
+    ext == ".md" and not ignored?(path)
   end
 
   defp ignored?(path) do
