@@ -28,6 +28,7 @@ defmodule Explicit.Init do
       docs/incidents docs/specs docs/processes docs/assets
       .explicit .claude .claude/skills .claude/skills/adr
       .claude/skills/opportunity .claude/skills/incident .claude/skills/spec
+      .claude/skills/test
     )
 
     for d <- dirs do
@@ -48,7 +49,8 @@ defmodule Explicit.Init do
     write_if_missing(dir, ".claude/skills/adr/skill.md", skill_adr()) ++
     write_if_missing(dir, ".claude/skills/opportunity/skill.md", skill_opp()) ++
     write_if_missing(dir, ".claude/skills/incident/skill.md", skill_inc()) ++
-    write_if_missing(dir, ".claude/skills/spec/skill.md", skill_spec(name))
+    write_if_missing(dir, ".claude/skills/spec/skill.md", skill_spec(name)) ++
+    write_if_missing(dir, ".claude/skills/test/skill.md", skill_test())
   end
 
   defp create_docs(dir, name) do
@@ -251,6 +253,44 @@ defmodule Explicit.Init do
     2. Create: `explicit docs new spec "Feature Title"`
 
     3. Write Story section and Gherkin scenarios
+    """
+  end
+
+  defp skill_test do
+    """
+    # Writing Tests
+
+    Every module in lib/ must have a corresponding test in test/.
+
+    ## Workflow
+
+    1. When creating `lib/my_app/accounts.ex`, also create `test/my_app/accounts_test.exs`
+
+    2. Test structure:
+       ```elixir
+       defmodule MyApp.AccountsTest do
+         use MyApp.DataCase  # or ExUnit.Case for non-DB modules
+
+         describe "function_name/arity" do
+           test "happy path" do
+             # ...
+           end
+
+           test "error case" do
+             # ...
+           end
+         end
+       end
+       ```
+
+    3. Run tests: `mix test`
+    4. Check coverage: `explicit quality --json`
+
+    ## Rules
+    - Every public function should have at least one test
+    - Test the happy path AND error cases
+    - Use `describe` blocks to group tests by function
+    - Use factories or fixtures, not hardcoded data
     """
   end
 

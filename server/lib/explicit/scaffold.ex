@@ -301,13 +301,23 @@ defmodule Explicit.Scaffold do
     explicit docs lint        # Validate docs
     ```
 
-    ## For Claude: Guidelines
+    ## For Claude: Mandatory Rules
 
-    - Run `explicit violations --json` after editing Elixir files
+    1. **Every new module must have a test file** — `lib/foo.ex` → `test/foo_test.exs`
+    2. **Every public function must have `@doc`** — describe what it does
+    3. **Every public function must have `@spec`** — type the inputs and outputs
+    4. **Run `explicit quality --json` before finishing** — must be clean
+    5. **Use `Decimal` for money**, never `float`
+    6. **Use `String.to_existing_atom/1`**, never `String.to_atom/1`
+
+    ## For Claude: Code Patterns
+
     - Business logic goes in `services/elixir/lib/#{name}/` contexts
     - Web endpoints go in `services/elixir/lib/#{name}_web/`
-    - Use `Decimal` for money, never `float`
-    - Use `String.to_existing_atom/1`, never `String.to_atom/1`
+    - Migrations go in `services/elixir/priv/repo/migrations/`
+    - Infrastructure changes go in `infrastructure/`
+    - When creating a context, also create its test module
+    - After editing docs, run `explicit docs lint`
     """
   end
 

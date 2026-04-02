@@ -80,6 +80,43 @@ defmodule Explicit.ConnectionHandler do
     response
   end
 
+  # ─── Quality gate ──────────────────────────────────────────────────────────
+
+  defp handle_method("quality", _params) do
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+
+    # Run project-level checks (missing tests)
+    project_violations = Checker.project_checks(project_dir)
+
+    # Aggregate all results
+    code_summary = ViolationStore.summary()
+    doc_summary = DocStore.summary()
+
+    # Count by category
+    all_violations = Enum.flat_map(ViolationStore.all(), fn {_path, vs} -> vs end)
+    missing_tests = Enum.count(project_violations)
+    missing_docs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutDoc"))
+    missing_specs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutSpec"))
+    iron_law = code_summary.total - missing_docs - missing_specs
+
+    clean = iron_law == 0 and doc_summary.errors == 0 and missing_tests == 0
+
+    Protocol.encode_ok(%{
+      clean: clean,
+      iron_law_violations: iron_law,
+      missing_tests: missing_tests,
+      missing_docs: missing_docs,
+      missing_specs: missing_specs,
+      doc_errors: doc_summary.errors,
+      doc_warnings: doc_summary.warnings,
+      total_issues: iron_law + missing_tests + doc_summary.errors,
+      details: %{
+        project_violations: project_violations,
+        by_check: code_summary.by_check
+      }
+    })
+  end
+
   # ─── Init/Scaffold methods ─────────────────────────────────────────────────
 
   defp handle_method("init", params) do

@@ -74,6 +74,8 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
     // Simple commands (no params)
     if (mem.eql(u8, command, "status"))
         return try allocator.dupe(u8, "{\"method\":\"status\"}\n");
+    if (mem.eql(u8, command, "quality"))
+        return try allocator.dupe(u8, "{\"method\":\"quality\"}\n");
     if (mem.eql(u8, command, "stop"))
         return try allocator.dupe(u8, "{\"method\":\"stop\"}\n");
     if (mem.eql(u8, command, "init"))
@@ -163,6 +165,7 @@ fn printUsage() void {
         \\  explicit scaffold <name>   Scaffold a full-stack Elixir monorepo
         \\  explicit watch             Start analysis server
         \\  explicit status            Show server status
+        \\  explicit quality           Quality gate report (tests, docs, lint)
         \\  explicit violations [file] List code violations
         \\  explicit check <file>      Force re-check a file
         \\  explicit stop              Stop the server
@@ -210,21 +213,14 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
     }
 }
 
-/// Stop hook: check violations + doc errors, exit 2 to block if any
+/// Stop hook: unified quality gate — checks violations, docs, tests, specs
 fn hookClaudeStop(allocator: mem.Allocator) !void {
     const git_root = findGitRoot(allocator) catch { process.exit(0); };
     defer allocator.free(git_root);
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
-    var has_issues = false;
-
-    // Check code violations
-    has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"violations\"}\n", "\"total\":0");
-
-    // Check doc diagnostics
-    has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"doc.diagnostics\"}\n", "\"errors\":0");
-
+    const has_issues = try checkMethod(sock_path, "{\"method\":\"quality\"}\n", "\"clean\":true");
     if (has_issues) process.exit(2);
     process.exit(0);
 }

@@ -155,9 +155,13 @@ defmodule Explicit.Watcher do
       Explicit.Doc.Discovery.discover(dir, schema)
       |> Enum.each(&check_doc/1)
 
+      # Project-level checks (missing test files)
+      project_violations = Explicit.Checker.project_checks_and_store(dir)
+
       code_summary = Explicit.ViolationStore.summary()
       doc_summary = Explicit.DocStore.summary()
-      Logger.info("Initial scan: #{code_summary.files} code files (#{code_summary.total} violations), #{doc_summary.files} docs (#{doc_summary.errors} errors)")
+      missing_tests = length(project_violations)
+      Logger.info("Initial scan: #{code_summary.files} code files (#{code_summary.total} violations), #{doc_summary.files} docs (#{doc_summary.errors} errors), #{missing_tests} missing tests")
     end)
   end
 
