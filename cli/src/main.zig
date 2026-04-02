@@ -301,13 +301,44 @@ fn socketPathForDir(allocator: mem.Allocator, dir: []const u8) ![]const u8 {
 fn connectToSocket(allocator: mem.Allocator) !net.Stream {
     const git_root = try findGitRoot(allocator);
     defer allocator.free(git_root);
-    const path = try socketPathForDir(allocator, git_root);
-    defer allocator.free(path);
+    const sock_path = try socketPathForDir(allocator, git_root);
+    defer allocator.free(sock_path);
 
-    return net.connectUnixSocket(path) catch {
-        stderr().print("Error: No server running. Start with: explicit watch\n", .{}) catch {};
+    // Try connecting to existing server
+    if (net.connectUnixSocket(sock_path)) |stream| {
+        return stream;
+    } else |_| {}
+
+    // Auto-start the server
+    const server_bin = try findServerBinary(allocator) orelse {
+        stderr().writeAll("Error: explicit-server not found.\n") catch {};
+        stderr().writeAll("Install: brew install explicit-sh/tap/explicit\n") catch {};
         process.exit(1);
     };
+    defer allocator.free(server_bin);
+
+    stderr().print("Starting server for {s}...\n", .{git_root}) catch {};
+
+    var child = std.process.Child.init(&.{ server_bin, "daemon" }, allocator);
+    child.pgid = 0;
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("EXPLICIT_PROJECT_DIR", git_root);
+    child.env_map = &env;
+    _ = try child.spawn();
+
+    // Wait for socket (up to 10s)
+    var attempts: u32 = 0;
+    while (attempts < 50) : (attempts += 1) {
+        std.Thread.sleep(200 * std.time.ns_per_ms);
+        if (net.connectUnixSocket(sock_path)) |stream| {
+            stderr().writeAll("Server started.\n") catch {};
+            return stream;
+        } else |_| {}
+    }
+
+    stderr().writeAll("Error: Server did not start within 10 seconds.\n") catch {};
+    process.exit(1);
 }
 
 fn cmdSend(allocator: mem.Allocator, request: []const u8, json_output: bool) !void {
@@ -377,50 +408,19 @@ fn findServerBinary(allocator: mem.Allocator) !?[]const u8 {
 }
 
 fn cmdWatch(allocator: mem.Allocator, json_output: bool) !void {
-    const git_root = try findGitRoot(allocator);
-    defer allocator.free(git_root);
-    const sock_path = try socketPathForDir(allocator, git_root);
-    defer allocator.free(sock_path);
+    // connectToSocket auto-starts the server if needed
+    var stream = try connectToSocket(allocator);
+    defer stream.close();
 
-    // Already running?
-    if (net.connectUnixSocket(sock_path)) |stream| {
-        stream.close();
-        stderr().print("Server already running for {s}\n", .{git_root}) catch {};
-        if (json_output)
-            stdout().print("{{\"ok\":true,\"data\":{{\"already_running\":true}}}}\n", .{}) catch {};
-        return;
-    } else |_| {}
-
-    const server_bin = try findServerBinary(allocator) orelse {
-        stderr().writeAll("Error: explicit-server not found.\n") catch {};
-        stderr().writeAll("Install: brew install explicit-sh/tap/explicit\n") catch {};
-        process.exit(1);
-    };
-    defer allocator.free(server_bin);
-
-    stderr().print("Starting server for: {s}\n", .{git_root}) catch {};
-
-    var child = std.process.Child.init(&.{ server_bin, "daemon" }, allocator);
-    child.pgid = 0;
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-    try env.put("EXPLICIT_PROJECT_DIR", git_root);
-    child.env_map = &env;
-    _ = try child.spawn();
-
-    // Wait for socket (up to 10s)
-    var attempts: u32 = 0;
-    while (attempts < 50) : (attempts += 1) {
-        std.Thread.sleep(200 * std.time.ns_per_ms);
-        if (net.connectUnixSocket(sock_path)) |stream| {
-            stream.close();
-            stderr().writeAll("Server started.\n") catch {};
-            if (json_output)
-                stdout().print("{{\"ok\":true,\"data\":{{\"started\":true}}}}\n", .{}) catch {};
-            return;
-        } else |_| {}
+    // Confirm it's running via status
+    try stream.writeAll("{\"method\":\"status\"}\n");
+    var buf: [65536]u8 = undefined;
+    const n = try stream.read(&buf);
+    if (n > 0) {
+        if (json_output) {
+            try stdout().writeAll(buf[0..n]);
+        } else {
+            try stderr().writeAll("Server is running.\n");
+        }
     }
-
-    stderr().writeAll("Error: Server did not start within 10 seconds.\n") catch {};
-    process.exit(1);
 }
