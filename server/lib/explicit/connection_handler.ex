@@ -80,6 +80,43 @@ defmodule Explicit.ConnectionHandler do
     response
   end
 
+  # ─── Init/Scaffold methods ─────────────────────────────────────────────────
+
+  defp handle_method("init", params) do
+    dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
+    case Explicit.Init.run(dir) do
+      {:ok, result} ->
+        Protocol.encode_ok(%{
+          project: result.project,
+          name: result.name,
+          created: result.created
+        })
+      {:error, msg} ->
+        Protocol.encode_error(msg)
+    end
+  end
+
+  defp handle_method("scaffold", %{"name" => name} = params) do
+    dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
+    case Explicit.Scaffold.run(dir, name) do
+      {:ok, result} ->
+        Protocol.encode_ok(%{
+          project: result.project,
+          name: result.name,
+          created: result.created,
+          phoenix: to_string(result.phoenix),
+          boundary: to_string(result.boundary),
+          deps: to_string(result.deps)
+        })
+      {:error, msg} ->
+        Protocol.encode_error(msg)
+    end
+  end
+
+  defp handle_method("scaffold", _params) do
+    Protocol.encode_error("scaffold requires 'name' param")
+  end
+
   # ─── Doc methods ───────────────────────────────────────────────────────────
 
   defp handle_method("doc.validate", params) do
