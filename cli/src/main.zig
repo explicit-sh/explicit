@@ -76,6 +76,10 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
         return try allocator.dupe(u8, "{\"method\":\"status\"}\n");
     if (mem.eql(u8, command, "quality"))
         return try allocator.dupe(u8, "{\"method\":\"quality\"}\n");
+    if (mem.eql(u8, command, "test"))
+        return try allocator.dupe(u8, "{\"method\":\"test.run\"}\n");
+    if (mem.eql(u8, command, "sarif"))
+        return try allocator.dupe(u8, "{\"method\":\"sarif\"}\n");
     if (mem.eql(u8, command, "stop"))
         return try allocator.dupe(u8, "{\"method\":\"stop\"}\n");
     if (mem.eql(u8, command, "init"))
@@ -166,6 +170,7 @@ fn printUsage() void {
         \\  explicit watch             Start analysis server
         \\  explicit status            Show server status
         \\  explicit quality           Quality gate report (tests, docs, lint)
+        \\  explicit test              Run mix test
         \\  explicit violations [file] List code violations
         \\  explicit check <file>      Force re-check a file
         \\  explicit stop              Stop the server

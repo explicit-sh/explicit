@@ -12,28 +12,44 @@ defmodule Explicit.ViolationStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def put(file_path, violations) when is_binary(file_path) and is_list(violations) do
-    :ets.insert(@table, {file_path, violations})
+  @doc "Store violations with optional content hash for cache invalidation"
+  def put(file_path, violations, hash \\ nil) when is_binary(file_path) and is_list(violations) do
+    :ets.insert(@table, {file_path, violations, hash})
     :ok
   end
 
   def get(file_path) when is_binary(file_path) do
     case :ets.lookup(@table, file_path) do
+      [{^file_path, violations, _hash}] -> violations
       [{^file_path, violations}] -> violations
       [] -> []
     end
   end
 
+  @doc "Get the stored hash for a file, or nil if not cached"
+  def get_hash(file_path) when is_binary(file_path) do
+    case :ets.lookup(@table, file_path) do
+      [{^file_path, _violations, hash}] -> hash
+      _ -> nil
+    end
+  end
+
   def all do
     :ets.tab2list(@table)
-    |> Map.new(fn {path, violations} -> {path, violations} end)
+    |> Map.new(fn
+      {path, violations, _hash} -> {path, violations}
+      {path, violations} -> {path, violations}
+    end)
   end
 
   def summary do
     all = :ets.tab2list(@table)
 
     violations =
-      Enum.flat_map(all, fn {_path, vs} -> vs end)
+      Enum.flat_map(all, fn
+        {_path, vs, _hash} -> vs
+        {_path, vs} -> vs
+      end)
 
     by_check =
       violations

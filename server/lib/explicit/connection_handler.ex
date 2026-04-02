@@ -117,6 +117,23 @@ defmodule Explicit.ConnectionHandler do
     })
   end
 
+  defp handle_method("sarif", _params) do
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+    sarif = Explicit.Sarif.generate(project_dir)
+    # Return raw SARIF JSON (not wrapped in ok/error envelope)
+    Jason.encode!(sarif) <> "\n"
+  end
+
+  defp handle_method("test.run", params) do
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+    timeout = Map.get(params, "timeout", 60) |> Kernel.*(1000)
+
+    case Explicit.TestRunner.run(project_dir, timeout: timeout) do
+      {:ok, result} -> Protocol.encode_ok(result)
+      {:error, msg} -> Protocol.encode_error(msg)
+    end
+  end
+
   # ─── Init/Scaffold methods ─────────────────────────────────────────────────
 
   defp handle_method("init", params) do
