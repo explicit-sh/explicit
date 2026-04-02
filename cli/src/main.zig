@@ -45,7 +45,9 @@ pub fn main() !void {
     }
 
     if (mem.eql(u8, command, "init")) {
-        try cmdInit(allocator, sub1);
+        try cmdInit(allocator);
+    } else if (mem.eql(u8, command, "scaffold")) {
+        try cmdScaffold(allocator, sub1);
     } else if (mem.eql(u8, command, "docs")) {
         try cmdDocs(allocator, sub1, sub2, json_output);
     } else if (mem.eql(u8, command, "hooks")) {
@@ -86,7 +88,8 @@ fn printUsage() void {
         \\explicit — Elixir code analysis + documentation tool
         \\
         \\Usage:
-        \\  explicit init <name>       Scaffold a full-stack Elixir monorepo
+        \\  explicit init              Initialize explicit in current project
+        \\  explicit scaffold <name>   Scaffold a full-stack Elixir monorepo
         \\  explicit watch             Start server for current project
         \\  explicit status            Show server status
         \\  explicit violations [file] List code violations
@@ -110,14 +113,61 @@ fn printUsage() void {
 
 // ─── Init command ────────────────────────────────────────────────────────────
 
-fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
+/// Initialize explicit in current project (works on existing projects)
+fn cmdInit(allocator: mem.Allocator) !void {
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.process.getCwd(&path_buf);
+
+    // Derive project name from directory name
+    const name = std.fs.path.basename(cwd);
+
+    stderr().writeAll("Initializing explicit...\n\n") catch {};
+
+    // Create docs structure
+    const doc_dirs = [_][]const u8{
+        "docs", "docs/architecture", "docs/opportunities", "docs/policies",
+        "docs/incidents", "docs/specs", "docs/processes", "docs/assets",
+        ".explicit", ".claude", ".claude/skills", ".claude/skills/adr",
+        ".claude/skills/opportunity", ".claude/skills/incident", ".claude/skills/spec",
+    };
+    for (doc_dirs) |dir| {
+        try mkdirSafe(allocator, cwd, dir);
+    }
+
+    // .explicit/ config
+    try writeTemplate(allocator, cwd, ".explicit/org.kdl", templates.org_kdl, name);
+    try copySchemaKdl(allocator, cwd);
+
+    // .claude/ hooks + skills
+    try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/adr/skill.md", templates.skill_adr, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/opportunity/skill.md", templates.skill_opp, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/incident/skill.md", templates.skill_inc, name);
+    try writeTemplate(allocator, cwd, ".claude/skills/spec/skill.md", templates.skill_spec, name);
+
+    // docs/README.md
+    try writeTemplate(allocator, cwd, "docs/README.md", templates.docs_readme, name);
+
+    stderr().writeAll(
+        \\
+        \\Done! Created:
+        \\  .explicit/           Schema + org config
+        \\  .claude/             Hooks + skills for Claude Code
+        \\  docs/                Document directories
+        \\
+        \\Run 'explicit watch' to start the analysis server.
+        \\Run 'explicit scaffold <name>' for full monorepo setup.
+        \\
+    ) catch {};
+}
+
+/// Scaffold a full-stack Elixir monorepo (Phoenix + infra + mobile + docs)
+fn cmdScaffold(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     const name = name_arg orelse {
-        try stderr().writeAll("Usage: explicit init <project_name>\n");
-        try stderr().writeAll("Example: explicit init my_app\n");
+        try stderr().writeAll("Usage: explicit scaffold <project_name>\n");
         process.exit(1);
     };
 
-    // Validate name (must be valid Elixir module name)
     for (name) |c| {
         if (!std.ascii.isAlphanumeric(c) and c != '_') {
             stderr().print("Error: '{s}' is not a valid project name (use snake_case)\n", .{name}) catch {};
@@ -128,15 +178,15 @@ fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&path_buf);
 
-    stderr().print("Initializing {s} monorepo...\n\n", .{name}) catch {};
+    stderr().print("Scaffolding {s} monorepo...\n\n", .{name}) catch {};
 
-    // 1. Create directory structure
+    // Create full directory structure
     try createDirs(allocator, cwd);
 
-    // 2. git init
+    // git init
     try runCmd(allocator, &.{ "git", "init" }, "git");
 
-    // 3. Write template files
+    // Root files
     try writeTemplate(allocator, cwd, ".gitignore", templates.gitignore, name);
     try writeTemplate(allocator, cwd, "devenv.nix", templates.devenv_nix, name);
     try writeTemplate(allocator, cwd, "Makefile", templates.makefile, name);
@@ -145,51 +195,23 @@ fn cmdInit(allocator: mem.Allocator, name_arg: ?[]const u8) !void {
     try writeTemplate(allocator, cwd, "clients/ios/README.md", templates.ios_readme, name);
     try writeTemplate(allocator, cwd, "clients/android/README.md", templates.android_readme, name);
 
-    // 4. .explicit/ config + docs structure
-    try writeTemplate(allocator, cwd, ".explicit/org.kdl", templates.org_kdl, name);
-    try copySchemaKdl(allocator, cwd);
-    try writeTemplate(allocator, cwd, "docs/README.md", templates.docs_readme, name);
+    // Run init for .explicit/ + .claude/ + docs/
+    try cmdInit(allocator);
 
-    // 5. .claude/ config + skills
-    try mkdirSafe(allocator, cwd, ".claude");
-    try writeTemplate(allocator, cwd, ".claude/settings.json", templates.claude_settings, name);
-
-    // Claude skills for doc types
-    const skill_dirs = [_][]const u8{
-        ".claude/skills/adr",
-        ".claude/skills/opportunity",
-        ".claude/skills/incident",
-        ".claude/skills/spec",
-    };
-    for (skill_dirs) |dir| {
-        try mkdirSafe(allocator, cwd, dir);
-    }
-    try writeTemplate(allocator, cwd, ".claude/skills/adr/skill.md", templates.skill_adr, name);
-    try writeTemplate(allocator, cwd, ".claude/skills/opportunity/skill.md", templates.skill_opp, name);
-    try writeTemplate(allocator, cwd, ".claude/skills/incident/skill.md", templates.skill_inc, name);
-    try writeTemplate(allocator, cwd, ".claude/skills/spec/skill.md", templates.skill_spec, name);
-
-    // 5. Phoenix app (runs mix phx.new, but NOT deps.get yet)
+    // Phoenix app
     try initPhoenix(allocator, name);
-
-    // 6. .credo.exs inside services/elixir
     try writeTemplate(allocator, cwd, "services/elixir/.credo.exs", templates.credo_exs, name);
-
-    // 7. Add boundary dep to mix.exs (before deps.get)
     try addBoundaryDep(allocator, cwd, name);
-
-    // 8. Install deps (after all mix.exs modifications)
     try installDeps(allocator);
 
     stderr().writeAll(
         \\
-        \\Done! Next steps:
+        \\Scaffold complete! Next steps:
         \\
-        \\  1. cd into the project directory
-        \\  2. devenv shell           # Enter dev environment
-        \\  3. make setup             # Install deps + create DB
-        \\  4. make dev               # Start Phoenix server
-        \\  5. explicit watch         # Start code analysis server
+        \\  devenv shell              # Enter dev environment
+        \\  make setup                # Install deps + create DB
+        \\  make dev                  # Start Phoenix server
+        \\  explicit watch            # Start code analysis server
         \\
     ) catch {};
 }

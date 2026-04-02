@@ -48,14 +48,14 @@ defmodule Explicit.Doc.CodePaths do
   defp match_file(_, _, _, _), do: []
 
   defp match_glob?(path, pattern) do
-    # Convert glob pattern to regex
-    regex_str = pattern
-    |> String.replace(".", "\\.")
-    |> String.replace("**", "<<<DOUBLESTAR>>>")
-    |> String.replace("*", "[^/]*")
-    |> String.replace("<<<DOUBLESTAR>>>", ".*")
+    # Convert glob to regex safely: escape all special chars, then handle * and **
+    escaped = Regex.escape(pattern)
+    regex_str = escaped
+    |> String.replace("\\*\\*", "<<<DS>>>")    # protect ** first
+    |> String.replace("\\*", "[^/]*")           # single * = anything except /
+    |> String.replace("<<<DS>>>", ".*")         # ** = anything including /
 
-    case Regex.compile("^#{regex_str}") do
+    case Regex.compile("^#{regex_str}$") do
       {:ok, regex} -> Regex.match?(regex, path)
       _ -> false
     end

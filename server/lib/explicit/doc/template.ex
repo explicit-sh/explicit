@@ -34,7 +34,7 @@ defmodule Explicit.Doc.Template do
   end
 
   @doc "Render document content from type definition"
-  def render(%TypeDef{} = type_def, id, title, extra_fields \\ %{}) do
+  def render(%TypeDef{} = type_def, _id, title, extra_fields \\ %{}) do
     frontmatter = render_frontmatter(type_def, extra_fields)
     sections = render_sections(type_def.sections, 2)
 
@@ -66,7 +66,7 @@ defmodule Explicit.Doc.Template do
     "#{name}: []\n"
   end
 
-  defp render_field(name, _field, nil) do
+  defp render_field(_name, _field, nil) do
     nil
   end
 

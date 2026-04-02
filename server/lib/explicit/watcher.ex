@@ -70,14 +70,16 @@ defmodule Explicit.Watcher do
   end
 
   def handle_info(:flush, state) do
+    # Offload checks to avoid blocking the watcher GenServer mailbox
     for file <- state.pending_files do
-      if File.exists?(file) do
-        check_file(file)
-      else
-        # File deleted
-        Explicit.ViolationStore.put(file, [])
-        Explicit.DocStore.put(file, [])
-      end
+      Task.start(fn ->
+        if File.exists?(file) do
+          check_file(file)
+        else
+          Explicit.ViolationStore.put(file, [])
+          Explicit.DocStore.put(file, [])
+        end
+      end)
     end
 
     {:noreply, %{state | pending_files: MapSet.new(), debounce_timer: nil}}

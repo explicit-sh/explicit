@@ -54,9 +54,9 @@ defmodule Explicit.Doc.Document do
   end
 
   defp split_frontmatter(content) do
-    case String.split(content, ~r/^---\s*$/m, parts: 3) do
-      ["", yaml, body] -> {:ok, yaml, body}
-      [_, yaml, body] when byte_size(yaml) > 0 -> {:ok, yaml, body}
+    # Anchored to file start — won't match thematic breaks (---) in body
+    case Regex.run(~r/\A---\r?\n(.*?)\r?\n---\r?\n(.*)\z/s, content) do
+      [_, yaml, body] -> {:ok, yaml, body}
       _ -> :no_frontmatter
     end
   end
@@ -87,8 +87,10 @@ defmodule Explicit.Doc.Document do
 
   @doc "Parse markdown body into section hierarchy"
   def parse_sections(body) do
+    # Strip code blocks before parsing headings to avoid false positives
+    stripped = Regex.replace(~r/```[^`]*```/s, body, "")
     heading_regex = ~r/^(\#{2,6})\s+(.+)$/m
-    body
+    stripped
     |> String.split(heading_regex, include_captures: true)
     |> build_sections([])
   end

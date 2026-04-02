@@ -41,13 +41,18 @@ defmodule Explicit.Application do
     end
   end
 
-  defp find_git_root("/"), do: File.cwd!()
+  defp find_git_root("/") do
+    require Logger
+    Logger.error("No .git directory found. Run 'git init' or set EXPLICIT_PROJECT_DIR.")
+    File.cwd!()
+  end
 
   defp find_git_root(dir) do
     if File.dir?(Path.join(dir, ".git")) do
       dir
     else
-      find_git_root(Path.dirname(dir))
+      parent = Path.dirname(dir)
+      if parent == dir, do: find_git_root("/"), else: find_git_root(parent)
     end
   end
 end
