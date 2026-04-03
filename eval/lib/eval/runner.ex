@@ -23,13 +23,17 @@ defmodule Eval.Runner do
       # Store answerer in process dict for hook callback access
       Process.put(:eval_answerer, answerer)
 
+      # Store workspace path for stop hook
+      Process.put(:eval_workspace, workspace)
+
       {:ok, session} = ClaudeCode.start_link(
         cwd: workspace,
         append_system_prompt: system_prompt,
         permission_mode: :bypass_permissions,
         max_turns: scenario.max_turns,
         hooks: %{
-          PreToolUse: [&handle_pre_tool_use/2]
+          PreToolUse: [&handle_pre_tool_use/2],
+          Stop: [&handle_stop/2]
         }
       )
 
@@ -77,6 +81,43 @@ defmodule Eval.Runner do
       File.rm(prompt_file)
     end
   end
+
+  # ─── Stop hook: block until docs + code exist ────────────────────────────
+
+  defp handle_stop(_stop_info, _tool_use_id) do
+    workspace = Process.get(:eval_workspace)
+    stop_count = Process.get(:eval_stop_count, 0)
+    Process.put(:eval_stop_count, stop_count + 1)
+
+    # Don't block forever — give up after 5 blocks
+    if stop_count >= 5 do
+      Logger.warning("Stop hook: giving up after #{stop_count} blocks")
+      :ok
+    else
+      docs = if workspace, do: Path.wildcard(Path.join(workspace, "docs/**/*.md")) |> Enum.reject(&String.contains?(&1, "README.md")), else: []
+      tests = if workspace, do: Path.wildcard(Path.join(workspace, "test/**/*_test.exs")), else: []
+      code = if workspace, do: Path.wildcard(Path.join(workspace, "lib/**/*.ex")), else: []
+
+      cond do
+        length(docs) == 0 ->
+          Logger.info("Stop hook: blocking — no decision documents created yet")
+          {:block, reason: "You haven't created any decision documents yet. Run `explicit docs new opp \"Title\"` to create an opportunity document, then `explicit docs new adr \"Title\"` for an architecture decision. Use AskUserQuestion if you need more information from the user first."}
+
+        length(code) == 0 ->
+          Logger.info("Stop hook: blocking — no code written yet")
+          {:block, reason: "Decision documents exist but no code has been written. Create a Phoenix app with contexts, schemas, and LiveView. Write tests first, then implementation. Reference doc IDs in @moduledoc."}
+
+        length(tests) == 0 ->
+          Logger.info("Stop hook: blocking — no tests written yet")
+          {:block, reason: "Code exists but no tests. Every module in lib/ needs a corresponding test in test/. Write tests that reference your SPEC documents."}
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  # ─── PreToolUse hooks ───────────────────────────────────────────────────
 
   defp handle_pre_tool_use(%{tool_name: "AskUserQuestion", tool_input: input}, _tool_use_id) do
     answerer = Process.get(:eval_answerer)
