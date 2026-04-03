@@ -309,13 +309,67 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
     stderr().print("Creating {s}...\n", .{name}) catch {};
 
     // git init
+    runIn(allocator, project_dir, &.{ "git", "init" });
+
+    // devenv init
+    runIn(allocator, project_dir, &.{ "devenv", "init" });
+
+    // Write devenv.nix with Elixir + PostgreSQL + Tailwind + esbuild
     {
-        var git = std.process.Child.init(&.{ "git", "init" }, allocator);
-        git.cwd = project_dir;
-        git.stdout_behavior = .Ignore;
-        git.stderr_behavior = .Ignore;
-        _ = git.spawn() catch {};
-        _ = git.wait() catch {};
+        const devenv_path = try std.fmt.allocPrint(allocator, "{s}/devenv.nix", .{project_dir});
+        defer allocator.free(devenv_path);
+        const f = fs.createFileAbsolute(devenv_path, .{}) catch {
+            stderr().writeAll("Warning: could not write devenv.nix\n") catch {};
+            return;
+        };
+        defer f.close();
+        const devenv_content = try std.fmt.allocPrint(allocator,
+            \\{{ pkgs, lib, config, inputs, ... }}:
+            \\
+            \\let
+            \\  elixir_1_20_rc4 = pkgs.beam28Packages.elixir_1_20.overrideAttrs (old: rec {{
+            \\    version = "1.20.0-rc.4";
+            \\    src = pkgs.fetchFromGitHub {{
+            \\      owner = "elixir-lang";
+            \\      repo = "elixir";
+            \\      rev = "v${{version}}";
+            \\      hash = "sha256-sboB+GW3T+t9gEcOGtd6NllmIlyWio1+cgWyyxE+484=";
+            \\    }};
+            \\    doCheck = false;
+            \\  }});
+            \\in
+            \\{{
+            \\  languages.elixir = {{
+            \\    enable = true;
+            \\    package = elixir_1_20_rc4;
+            \\  }};
+            \\
+            \\  languages.erlang = {{
+            \\    enable = true;
+            \\    package = pkgs.beam.interpreters.erlang_28;
+            \\  }};
+            \\
+            \\  services.postgres = {{
+            \\    enable = true;
+            \\    listen_addresses = "127.0.0.1";
+            \\  }};
+            \\
+            \\  packages = [
+            \\    pkgs.git
+            \\    pkgs.tailwindcss
+            \\    pkgs.esbuild
+            \\    pkgs.opentofu
+            \\  ];
+            \\
+            \\  enterShell = ''
+            \\    echo "{s} dev environment"
+            \\    echo "Elixir $(elixir --version | tail -1)"
+            \\  '';
+            \\}}
+            \\
+        , .{name});
+        defer allocator.free(devenv_content);
+        f.writeAll(devenv_content) catch {};
     }
 
     // Create minimal directory structure
@@ -330,7 +384,19 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
     }
 
     stderr().print("Created {s}/\n", .{name}) catch {};
-    stderr().writeAll("Next: cd into the project and run 'explicit init' to finish setup.\n") catch {};
+    stderr().writeAll("Next:\n") catch {};
+    stderr().print("  cd {s}\n", .{name}) catch {};
+    stderr().writeAll("  explicit init       # finish setup (schema, hooks, skills)\n") catch {};
+    stderr().writeAll("  explicit claude     # start coding\n") catch {};
+}
+
+fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) void {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = dir;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+    _ = child.wait() catch return;
 }
 
 // ─── AI launcher ─────────────────────────────────────────────────────────────
