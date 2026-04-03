@@ -52,7 +52,7 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
-        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--yes", "--append-system-prompt" });
+        try cmdLaunchAI(allocator, "claude", &.{ "--permission-mode", "bypassPermissions", "--append-system-prompt" });
         return;
     } else if (mem.eql(u8, command, "gemini")) {
         try cmdLaunchAI(allocator, "gemini", &.{"-i"});
