@@ -178,7 +178,10 @@ defmodule Explicit.Init do
       "hooks" => %{
         "PostToolUse" => [%{
           "matcher" => "^(Edit|Write)$",
-          "hooks" => [%{"type" => "command", "command" => "explicit hooks claude check-fixme"}]
+          "hooks" => [
+            %{"type" => "command", "command" => "explicit hooks claude check-fixme"},
+            %{"type" => "command", "command" => "explicit hooks claude check-code"}
+          ]
         }],
         "Stop" => [%{
           "hooks" => [%{"type" => "command", "command" => "explicit hooks claude stop"}]

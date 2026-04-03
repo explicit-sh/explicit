@@ -112,14 +112,41 @@ defmodule Explicit.SystemPrompt do
     - No unsupervised GenServer/Agent.start_link
     - Modules must reference doc IDs in @moduledoc
 
+    ## BAD — Do NOT do this
+
+    - Creating a doc with section content "TBD", "TODO", or a single sentence
+    - Writing `@moduledoc "Implements OPP-001"` without explaining what the module does
+    - Asking all questions in a single text block instead of using AskUserQuestion tool
+    - Writing tests AFTER code — tests must come BEFORE implementation
+    - Skipping ADR when making architecture decisions (e.g. "use LiveView", "use ETS")
+    - Writing `IO.inspect` in production code
+    - Using `Mix.env()` outside config files (breaks in releases)
+    - Calling `Repo.all` inside `Enum.map` (N+1 query — use preloads)
+
+    ## GOOD — Do this instead
+
+    - Each doc section should have at least 2-3 sentences of real content
+    - `@moduledoc` should explain what the module does AND reference doc IDs
+    - Use AskUserQuestion tool for every batch of clarifying questions
+    - Write a failing test, then write the code that makes it pass
+    - Every technical choice (database, framework, library) gets an ADR
+
     ## Elixir/Phoenix Patterns
 
     - Use contexts (bounded contexts) for business logic separation
     - Use Ecto changesets for validation
     - Use Phoenix.LiveView for real-time UI when appropriate
-    - Use Wallaby for browser integration tests
+    - Use Wallaby for browser integration tests of critical user flows
     - Use Decimal for money, not float
-    - Add `code_paths` to ADR/POL frontmatter linking docs to source files
+    - Use `Repo.preload` or `from(... preload: [...])` to avoid N+1 queries
+    - Never use `IO.inspect` in non-test code
+    - Never call `Mix.env()` outside config/ files
+
+    ## Linking Direction: Code → Docs (not the other way)
+
+    The tool scans your Elixir code for doc references like OPP-001, ADR-001.
+    Put references in YOUR code — the tool finds them automatically.
+    Do NOT add code_paths to doc frontmatter — that's backwards.
 
     ## Suppression
 

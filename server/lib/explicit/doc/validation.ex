@@ -109,14 +109,40 @@ defmodule Explicit.Doc.Validation do
       if paragraphs < min do
         [{:warning, "C001", "Section '#{name}' has #{paragraphs} paragraph(s), expected at least #{min}"}]
       else
-        []
+        check_section_substance(name, section.content)
       end
     else
       []
     end
   end
 
+  defp validate_section_content(%SectionDef{name: name, required: true}, sections) do
+    section = Enum.find(sections, &(&1.name == name))
+    if section do
+      check_section_substance(name, section.content)
+    else
+      []
+    end
+  end
+
   defp validate_section_content(_sec_def, _sections), do: []
+
+  # Detect low-effort boilerplate content
+  defp check_section_substance(name, content) do
+    trimmed = String.trim(content)
+    word_count = trimmed |> String.split(~r/\s+/) |> length()
+
+    cond do
+      word_count < 5 ->
+        [{:warning, "C002", "Section '#{name}' has only #{word_count} words — add more detail"}]
+      String.match?(trimmed, ~r/^(TBD|TODO|FIXME|N\/A|None|\.{3})$/i) ->
+        [{:warning, "C003", "Section '#{name}' contains placeholder text — fill in real content"}]
+      String.match?(trimmed, ~r/^(This section describes|The purpose of this|Description goes here)/i) ->
+        [{:warning, "C003", "Section '#{name}' contains boilerplate filler — write specific content"}]
+      true ->
+        []
+    end
+  end
 
   # ─── Rule validation ──────────────────────────────────────────────────────
 
