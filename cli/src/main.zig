@@ -277,7 +277,10 @@ fn hookSendQuiet(allocator: mem.Allocator, request: []const u8) !void {
 
 fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.process.getCwd(&path_buf);
+    const cwd = std.process.getCwd(&path_buf) catch {
+        stderr().writeAll("Error: Current directory does not exist. cd to a valid directory.\n") catch {};
+        process.exit(1);
+    };
     var dir = try allocator.dupe(u8, cwd);
 
     while (true) {
@@ -399,16 +402,18 @@ fn printHuman(response: []const u8) !void {
         }
         if (extractJsonInt(response, "\"total_violations\":")) |n| {
             if (n == 0) {
-                try out.writeAll("Violations: 0\n");
+                try out.writeAll("Violations: none\n");
             } else {
                 try out.print("Violations: {d}\n", .{n});
             }
         }
-        if (extractJsonInt(response, "\"docs_checked\":")) |n| {
-            try out.print("Docs: {d}\n", .{n});
+        const doc_errors = extractJsonInt(response, "\"doc_errors\":") orelse 0;
+        const doc_warnings = extractJsonInt(response, "\"doc_warnings\":") orelse 0;
+        if (doc_errors > 0) {
+            try out.print("Doc errors: {d}\n", .{doc_errors});
         }
-        if (extractJsonInt(response, "\"doc_errors\":")) |n| {
-            if (n > 0) try out.print("Doc errors: {d}\n", .{n});
+        if (doc_warnings > 0) {
+            try out.print("Doc warnings: {d}\n", .{doc_warnings});
         }
         return;
     }

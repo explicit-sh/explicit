@@ -1,4 +1,4 @@
-.PHONY: build-cli build-cli-release build-server dev clean
+.PHONY: build-cli build-cli-release build-server dev debug clean
 
 ZIG ?= zig
 # macOS 26 (Tahoe) is too new for Zig's linker — target macOS 15 for compat
@@ -14,6 +14,11 @@ build-cli-release:
 
 build-server:
 	cd server && MIX_ENV=prod mix release explicit_server --overwrite
+
+# Build debug wrapper (copy CLI binary to debug/)
+debug: build-cli
+	mkdir -p debug
+	cp cli/explicit debug/explicit
 
 # Dev mode: start server via mix (no release needed)
 dev:

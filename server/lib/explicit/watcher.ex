@@ -8,7 +8,7 @@ defmodule Explicit.Watcher do
   require Logger
 
   @debounce_ms 200
-  @ignored_dirs ~w(_build deps .elixir_ls .git node_modules)
+  @ignored_dirs ~w(_build deps .elixir_ls .git node_modules .claude .explicit)
 
   def start_link(project_dir) do
     GenServer.start_link(__MODULE__, project_dir, name: __MODULE__)
