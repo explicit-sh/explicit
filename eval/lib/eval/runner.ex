@@ -20,11 +20,17 @@ defmodule Eval.Runner do
     start_time = System.monotonic_time(:millisecond)
 
     try do
+      # Store answerer in process dict for hook callback access
+      Process.put(:eval_answerer, answerer)
+
       {:ok, session} = ClaudeCode.start_link(
         cwd: workspace,
         append_system_prompt: system_prompt,
         permission_mode: :bypass_permissions,
-        max_turns: scenario.max_turns
+        max_turns: scenario.max_turns,
+        hooks: %{
+          PreToolUse: [&handle_pre_tool_use/2]
+        }
       )
 
       # Collect all messages from the stream
@@ -35,18 +41,6 @@ defmodule Eval.Runner do
       ClaudeCode.stop(session)
 
       duration = System.monotonic_time(:millisecond) - start_time
-
-      # Debug: log first assistant message structure
-      assistant_msgs = Enum.filter(messages, &(Map.get(&1, :type) == :assistant))
-      if length(assistant_msgs) > 0 do
-        first = hd(assistant_msgs)
-        msg = Map.get(first, :message, %{})
-        Logger.debug("First assistant message keys: #{inspect(Map.keys(msg))}")
-        content = Map.get(msg, :content, Map.get(msg, "content", []))
-        if is_list(content) do
-          Logger.debug("Content block types: #{inspect(Enum.map(content, fn c -> {Map.get(c, :type, Map.get(c, "type", :unknown))} end) |> Enum.take(5))}")
-        end
-      end
 
       # Extract tool uses from messages
       tool_uses = extract_tool_uses(messages)
@@ -75,6 +69,23 @@ defmodule Eval.Runner do
     after
       File.rm(prompt_file)
     end
+  end
+
+  defp handle_pre_tool_use(%{tool_name: "AskUserQuestion", tool_input: input}, _tool_use_id) do
+    answerer = Process.get(:eval_answerer)
+    questions = Map.get(input, "questions", [])
+
+    if answerer && questions != [] do
+      Logger.info("Answering #{length(questions)} question(s) via LLM...")
+      answers = Eval.Answerer.answer_questions(answerer, questions)
+      {:allow, updated_input: Map.put(input, "answers", answers)}
+    else
+      :ok
+    end
+  end
+
+  defp handle_pre_tool_use(_tool_info, _tool_use_id) do
+    :ok
   end
 
   defp build_system_prompt do
@@ -122,17 +133,15 @@ defmodule Eval.Runner do
         is_map(msg) and Map.has_key?(msg, "tool_name") ->
           [%{name: msg["tool_name"], input: msg["tool_input"] || %{}}]
 
-        # Message with content blocks
-        Map.has_key?(msg, :content) and is_list(msg.content) ->
-          extract_from_content(msg.content)
-        is_map(msg) and is_list(Map.get(msg, "content", nil)) ->
-          extract_from_content(msg["content"])
-
         # claude_code SDK: assistant message with :message containing :content
         Map.get(msg, :type) == :assistant ->
           inner = Map.get(msg, :message, %{})
-          content = Map.get(inner, :content, Map.get(inner, "content", []))
+          content = if is_map(inner), do: Map.get(inner, :content, Map.get(inner, "content", [])), else: []
           if is_list(content), do: extract_from_content(content), else: []
+
+        # Direct content blocks on message
+        is_map(msg) and is_list(Map.get(msg, :content, nil)) ->
+          extract_from_content(msg.content)
 
         # Struct with __struct__ field — try to access fields generically
         is_struct(msg) ->
