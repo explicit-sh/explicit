@@ -312,21 +312,22 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
     defer allocator.free(unescaped);
 
-    const has_devenv = hasDevenvNix(allocator);
+    const devenv_dir = findDevenvDir(allocator);
+    defer if (devenv_dir) |d| allocator.free(d);
 
-    if (has_devenv) {
-        stderr().print("Starting {s} with nono sandbox + devenv...\n", .{tool_name}) catch {};
+    if (devenv_dir) |d| {
+        stderr().print("Starting {s} with nono sandbox + devenv ({s})...\n", .{ tool_name, d }) catch {};
     } else {
         stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
     }
 
-    // Build argv: [devenv shell --] nono wrap --allow . -- tool_name [flags...] prompt
+    // Build argv: [devenv shell --directory DIR --] nono wrap --allow . -- tool [flags] prompt
     // devenv is outer (needs network for cachix), nono is inner (sandboxes the AI)
-    var argv_buf: [20][]const u8 = undefined;
+    var argv_buf: [24][]const u8 = undefined;
     var argc: usize = 0;
 
     // devenv shell wrapper (outer — needs network access for nix/cachix)
-    if (has_devenv) {
+    if (devenv_dir != null) {
         argv_buf[argc] = "devenv"; argc += 1;
         argv_buf[argc] = "shell"; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
@@ -352,6 +353,11 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
+    // Run devenv shell from the directory that has devenv.nix
+    if (devenv_dir) |d| {
+        child.cwd = d;
+    }
+
     // Add our bin dir to PATH so hooks can find `explicit`
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
@@ -372,9 +378,9 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().writeAll("Install: brew install nono\n") catch {};
 
         // Rebuild without nono (keep devenv outer if present)
-        var fallback_buf: [12][]const u8 = undefined;
+        var fallback_buf: [14][]const u8 = undefined;
         var fc: usize = 0;
-        if (has_devenv) {
+        if (devenv_dir != null) {
             fallback_buf[fc] = "devenv"; fc += 1;
             fallback_buf[fc] = "shell"; fc += 1;
             fallback_buf[fc] = "--"; fc += 1;
@@ -390,6 +396,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         fallback.stdout_behavior = .Inherit;
         fallback.stderr_behavior = .Inherit;
         fallback.env_map = &env;
+        if (devenv_dir) |d| { fallback.cwd = d; }
         _ = try fallback.spawn();
         const ft = try fallback.wait();
         process.exit(ft.Exited);
@@ -398,9 +405,24 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     process.exit(term.Exited);
 }
 
-/// Check if devenv.nix exists in CWD
-fn hasDevenvNix(_: mem.Allocator) bool {
-    return if (fs.cwd().statFile("devenv.nix")) |_| true else |_| false;
+/// Find devenv.nix in CWD or parent dirs. Returns the directory path or null.
+fn findDevenvDir(allocator: mem.Allocator) ?[]const u8 {
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = std.process.getCwd(&path_buf) catch return null;
+    var dir = allocator.dupe(u8, cwd) catch return null;
+
+    while (true) {
+        const devenv_path = std.fmt.allocPrint(allocator, "{s}/devenv.nix", .{dir}) catch return null;
+        const found = if (fs.accessAbsolute(devenv_path, .{})) true else |_| false;
+        allocator.free(devenv_path);
+        if (found) return dir;
+
+        const parent = std.fs.path.dirname(dir) orelse { allocator.free(dir); return null; };
+        if (mem.eql(u8, parent, dir)) { allocator.free(dir); return null; }
+        const parent_owned = allocator.dupe(u8, parent) catch { allocator.free(dir); return null; };
+        allocator.free(dir);
+        dir = parent_owned;
+    }
 }
 
 // ─── Socket helpers ──────────────────────────────────────────────────────────
