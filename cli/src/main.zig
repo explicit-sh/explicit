@@ -373,18 +373,179 @@ fn cmdSend(allocator: mem.Allocator, request: []const u8, json_output: bool) !vo
 
 fn printHuman(response: []const u8) !void {
     const out = stdout();
-    if (mem.indexOf(u8, response, "\"ok\":true") != null) {
-        if (mem.indexOf(u8, response, "\"violations\":[]") != null) {
-            try out.writeAll("No violations found.\n");
-        } else if (mem.indexOf(u8, response, "\"stopped\":true") != null) {
-            try out.writeAll("Server stopped.\n");
+    const err = stderr();
+
+    // Error responses
+    if (mem.indexOf(u8, response, "\"ok\":false") != null) {
+        if (extractJsonString(response, "\"error\":\"")) |msg| {
+            try err.writeAll("Error: ");
+            try err.writeAll(msg);
+            try err.writeAll("\n");
         } else {
-            try out.writeAll(response);
+            try err.writeAll(response);
         }
-    } else {
-        try stderr().writeAll("Error: ");
-        try stderr().writeAll(response);
+        return;
     }
+
+    // ── status ──────────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"watching\":") != null and
+        mem.indexOf(u8, response, "\"files_checked\":") != null)
+    {
+        if (extractJsonString(response, "\"watching\":\"")) |dir| {
+            try out.print("Watching: {s}\n", .{dir});
+        }
+        if (extractJsonInt(response, "\"files_checked\":")) |n| {
+            try out.print("Code files: {d}\n", .{n});
+        }
+        if (extractJsonInt(response, "\"total_violations\":")) |n| {
+            if (n == 0) {
+                try out.writeAll("Violations: 0\n");
+            } else {
+                try out.print("Violations: {d}\n", .{n});
+            }
+        }
+        if (extractJsonInt(response, "\"docs_checked\":")) |n| {
+            try out.print("Docs: {d}\n", .{n});
+        }
+        if (extractJsonInt(response, "\"doc_errors\":")) |n| {
+            if (n > 0) try out.print("Doc errors: {d}\n", .{n});
+        }
+        return;
+    }
+
+    // ── quality ─────────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"clean\":true") != null) {
+        try out.writeAll("Quality: clean\n");
+        return;
+    }
+    if (mem.indexOf(u8, response, "\"clean\":false") != null) {
+        try out.writeAll("Quality: issues found\n");
+        printIfNonZero(out, response, "\"iron_law_violations\":", "  Iron law violations") catch {};
+        printIfNonZero(out, response, "\"missing_tests\":", "  Missing test files") catch {};
+        printIfNonZero(out, response, "\"missing_docs\":", "  Missing @doc") catch {};
+        printIfNonZero(out, response, "\"missing_specs\":", "  Missing @spec") catch {};
+        printIfNonZero(out, response, "\"doc_errors\":", "  Doc validation errors") catch {};
+        return;
+    }
+
+    // ── violations ──────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"violations\":[]") != null) {
+        try out.writeAll("No violations found.\n");
+        return;
+    }
+    if (mem.indexOf(u8, response, "\"violations\":[") != null) {
+        if (extractJsonInt(response, "\"total\":")) |n| {
+            try out.print("{d} violation(s):\n", .{n});
+        }
+        // Print each violation message
+        var it = mem.splitSequence(u8, response, "\"message\":\"");
+        _ = it.next(); // skip prefix
+        while (it.next()) |chunk| {
+            if (mem.indexOf(u8, chunk, "\"")) |end| {
+                try out.writeAll("  ");
+                try out.writeAll(chunk[0..end]);
+                try out.writeAll("\n");
+            }
+        }
+        return;
+    }
+
+    // ── stopped ─────────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"stopped\":true") != null) {
+        try out.writeAll("Server stopped.\n");
+        return;
+    }
+
+    // ── init/scaffold ───────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"created\":[") != null) {
+        if (extractJsonString(response, "\"project\":\"")) |dir| {
+            try out.print("Project: {s}\n", .{dir});
+        }
+        // List created files
+        var it = mem.splitSequence(u8, response, "\"created\":[\"");
+        _ = it.next();
+        if (it.next()) |chunk| {
+            if (mem.indexOf(u8, chunk, "]")) |end| {
+                const files_str = chunk[0..end];
+                var fit = mem.splitSequence(u8, files_str, "\",\"");
+                try out.writeAll("Created:\n");
+                while (fit.next()) |f| {
+                    const clean = mem.trimRight(u8, f, "\"");
+                    if (clean.len > 0) {
+                        try out.writeAll("  ");
+                        try out.writeAll(clean);
+                        try out.writeAll("\n");
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // ── doc.list ────────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"docs\":[") != null) {
+        if (extractJsonInt(response, "\"total\":")) |n| {
+            try out.print("{d} document(s):\n", .{n});
+        }
+        var it = mem.splitSequence(u8, response, "\"id\":\"");
+        _ = it.next();
+        while (it.next()) |chunk| {
+            if (mem.indexOf(u8, chunk, "\"")) |end| {
+                const id = chunk[0..end];
+                try out.writeAll("  ");
+                try out.writeAll(id);
+                // Extract title for this entry
+                if (mem.indexOf(u8, chunk, "\"title\":\"")) |tstart| {
+                    const after_title = chunk[tstart + 9 ..];
+                    if (mem.indexOf(u8, after_title, "\"")) |tend| {
+                        try out.writeAll(" — ");
+                        try out.writeAll(after_title[0..tend]);
+                    }
+                }
+                try out.writeAll("\n");
+            }
+        }
+        return;
+    }
+
+    // ── test results ────────────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"tests\":") != null and
+        mem.indexOf(u8, response, "\"failures\":") != null)
+    {
+        if (mem.indexOf(u8, response, "\"passed\":true") != null) {
+            try out.writeAll("Tests: passed\n");
+        } else {
+            try out.writeAll("Tests: FAILED\n");
+        }
+        if (extractJsonInt(response, "\"tests\":")) |n| try out.print("  Total: {d}\n", .{n});
+        if (extractJsonInt(response, "\"failures\":")) |n| {
+            if (n > 0) try out.print("  Failures: {d}\n", .{n});
+        }
+        return;
+    }
+
+    // ── fallback: dump raw JSON ─────────────────────────────────────
+    try out.writeAll(response);
+}
+
+fn printIfNonZero(out: anytype, response: []const u8, key: []const u8, label: []const u8) !void {
+    if (extractJsonInt(response, key)) |n| {
+        if (n > 0) try out.print("{s}: {d}\n", .{ label, n });
+    }
+}
+
+fn extractJsonString(response: []const u8, key: []const u8) ?[]const u8 {
+    const start = (mem.indexOf(u8, response, key) orelse return null) + key.len;
+    const end = mem.indexOf(u8, response[start..], "\"") orelse return null;
+    return response[start .. start + end];
+}
+
+fn extractJsonInt(response: []const u8, key: []const u8) ?i64 {
+    const start = (mem.indexOf(u8, response, key) orelse return null) + key.len;
+    var end: usize = start;
+    while (end < response.len and (response[end] >= '0' and response[end] <= '9')) : (end += 1) {}
+    if (end == start) return null;
+    return std.fmt.parseInt(i64, response[start..end], 10) catch null;
 }
 
 fn findServerBinary(allocator: mem.Allocator) !?[]const u8 {
