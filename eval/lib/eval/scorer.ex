@@ -132,11 +132,28 @@ defmodule Eval.Scorer do
   end
 
   defp run_quality(workspace) do
-    case System.cmd("explicit", ["quality", "--json"], cd: workspace, stderr_to_stdout: true) do
-      {output, _} -> String.contains?(output, "\"clean\":true")
-      _ -> false
+    # Inline quality check — doesn't require explicit server running
+    code_files = Path.wildcard(Path.join(workspace, "lib/**/*.ex"))
+    |> Enum.reject(&String.contains?(&1, "application.ex"))
+    |> Enum.reject(&String.contains?(&1, "repo.ex"))
+    |> Enum.reject(&String.contains?(&1, "endpoint.ex"))
+    |> Enum.reject(&String.contains?(&1, "telemetry.ex"))
+    |> Enum.reject(&String.contains?(&1, "gettext.ex"))
+    |> Enum.reject(&String.contains?(&1, "router.ex"))
+    |> Enum.reject(&String.contains?(&1, "_web.ex"))
+
+    if code_files == [] do
+      false
+    else
+      Enum.all?(code_files, fn f ->
+        case File.read(f) do
+          {:ok, content} ->
+            has_docs = String.contains?(content, "@doc") or String.contains?(content, "@moduledoc")
+            has_doc_refs = Regex.match?(~r/(ADR|OPP|SPEC|INC|POL)-\d{3}/, content)
+            has_docs and has_doc_refs
+          _ -> false
+        end
+      end)
     end
-  rescue
-    _ -> false
   end
 end

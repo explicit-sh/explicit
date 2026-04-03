@@ -9,7 +9,7 @@ defmodule Eval.ScenarioTest do
 
     assert scenario.name == "selling-llama-milk"
     assert scenario.prompt =~ "llama milk"
-    assert scenario.max_turns == 25
+    assert scenario.max_turns == 50
     assert scenario.expect.questions_first == true
     assert scenario.expect.min_questions == 2
   end

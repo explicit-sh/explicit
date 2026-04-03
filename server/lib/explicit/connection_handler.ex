@@ -107,7 +107,8 @@ defmodule Explicit.ConnectionHandler do
     missing_specs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutSpec"))
     iron_law = code_summary.total - missing_docs - missing_specs
 
-    clean = iron_law == 0 and doc_summary.errors == 0 and missing_tests == 0
+    clean = iron_law == 0 and doc_summary.errors == 0 and missing_tests == 0 and
+            missing_docs == 0 and missing_specs == 0
 
     Protocol.encode_ok(%{
       clean: clean,

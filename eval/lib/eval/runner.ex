@@ -123,11 +123,33 @@ defmodule Eval.Runner do
           Logger.info("Stop hook [#{stop_count}]: no doc refs in code")
           {:block, reason: "Code exists but doesn't reference any decision documents. Add doc IDs to @moduledoc:\n\n@moduledoc \"\"\"\nImplements OPP-001: Title\nSee ADR-001: Decision\n\"\"\""}
 
+        not has_docs_in_code?(code) ->
+          Logger.info("Stop hook [#{stop_count}]: missing @doc/@moduledoc")
+          {:block, reason: "Some modules are missing @doc or @moduledoc. Every public function needs @doc and @spec. Add documentation to your modules."}
+
         true ->
           Logger.info("Stop hook [#{stop_count}]: all checks pass — allowing stop")
           :ok
       end
     end
+  end
+
+  defp has_docs_in_code?(code_files) do
+    # Check that non-boilerplate modules have @doc or @moduledoc
+    code_files
+    |> Enum.reject(&String.contains?(&1, "application.ex"))
+    |> Enum.reject(&String.contains?(&1, "repo.ex"))
+    |> Enum.reject(&String.contains?(&1, "endpoint.ex"))
+    |> Enum.reject(&String.contains?(&1, "telemetry.ex"))
+    |> Enum.reject(&String.contains?(&1, "router.ex"))
+    |> Enum.reject(&String.contains?(&1, "_web.ex"))
+    |> Enum.reject(&String.contains?(&1, "gettext.ex"))
+    |> Enum.all?(fn f ->
+      case File.read(f) do
+        {:ok, content} -> String.contains?(content, "@doc") or String.contains?(content, "@moduledoc")
+        _ -> true
+      end
+    end)
   end
 
   # ─── PreToolUse hooks ───────────────────────────────────────────────────
