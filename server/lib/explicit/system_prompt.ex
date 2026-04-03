@@ -9,6 +9,12 @@ defmodule Explicit.SystemPrompt do
     """
     IMPORTANT: This project uses explicit for code quality and decision documentation.
 
+    ## Sandbox
+
+    You are running inside a nono sandbox. You can ONLY access files in the current
+    project directory. Do NOT cd outside the project or reference absolute paths
+    outside it. All files must be created within the project root.
+
     ## Workflow
 
     1. Ask 3-5 clarifying questions using AskUserQuestion — NEVER dump questions as text
