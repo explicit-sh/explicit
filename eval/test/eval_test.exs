@@ -3,8 +3,16 @@ defmodule EvalTest do
 
   @moduletag :eval
 
-  @tag timeout: 600_000
-  test "selling llama milk scenario" do
+  @tag timeout: 300_000
+  test "create opp doc (simple)" do
+    score = Eval.run("create_opp_doc", keep: true)
+
+    assert score.questions_first, "Claude should ask questions first"
+    assert score.docs_created > 0, "Expected at least 1 doc created"
+  end
+
+  @tag timeout: 900_000
+  test "selling llama milk (full workflow)" do
     score = Eval.run("selling_llama_milk", keep: true)
 
     assert score.questions_first, "Claude should ask questions before writing code"
