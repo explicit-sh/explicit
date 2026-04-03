@@ -89,8 +89,8 @@ defmodule Eval.Runner do
     stop_count = Process.get(:eval_stop_count, 0)
     Process.put(:eval_stop_count, stop_count + 1)
 
-    # Don't block forever — give up after 5 blocks
-    if stop_count >= 5 do
+    # Give up after 15 blocks total to avoid infinite loops
+    if stop_count >= 15 do
       Logger.warning("Stop hook: giving up after #{stop_count} blocks")
       :ok
     else
@@ -98,20 +98,33 @@ defmodule Eval.Runner do
       tests = if workspace, do: Path.wildcard(Path.join(workspace, "test/**/*_test.exs")), else: []
       code = if workspace, do: Path.wildcard(Path.join(workspace, "lib/**/*.ex")), else: []
 
+      # Check for doc references in code (OPP-001, ADR-001, etc)
+      doc_refs = Enum.sum(Enum.map(code, fn f ->
+        case File.read(f) do
+          {:ok, c} -> length(Regex.scan(~r/(ADR|OPP|SPEC|INC|POL)-\d{3}/, c))
+          _ -> 0
+        end
+      end))
+
       cond do
         length(docs) == 0 ->
-          Logger.info("Stop hook: blocking — no decision documents created yet")
-          {:block, reason: "You haven't created any decision documents yet. Run `explicit docs new opp \"Title\"` to create an opportunity document, then `explicit docs new adr \"Title\"` for an architecture decision. Use AskUserQuestion if you need more information from the user first."}
+          Logger.info("Stop hook [#{stop_count}]: no docs")
+          {:block, reason: "No decision documents exist. Before writing ANY code you must:\n1. Use AskUserQuestion if you need more info\n2. Run: explicit docs new opp \"Title\"\n3. Run: explicit docs new adr \"Title\"\n4. Edit the generated files to fill in details\n5. Run: explicit docs validate"}
 
         length(code) == 0 ->
-          Logger.info("Stop hook: blocking — no code written yet")
-          {:block, reason: "Decision documents exist but no code has been written. Create a Phoenix app with contexts, schemas, and LiveView. Write tests first, then implementation. Reference doc IDs in @moduledoc."}
+          Logger.info("Stop hook [#{stop_count}]: no code")
+          {:block, reason: "Docs exist (#{Enum.map(docs, &Path.basename/1) |> Enum.join(", ")}) but no Elixir code. Write a Phoenix app:\n1. Create lib/ modules with @moduledoc referencing doc IDs (e.g. \"Implements OPP-001\")\n2. Write tests in test/ that reference SPEC docs\n3. Every public function needs @doc and @spec"}
 
         length(tests) == 0 ->
-          Logger.info("Stop hook: blocking — no tests written yet")
-          {:block, reason: "Code exists but no tests. Every module in lib/ needs a corresponding test in test/. Write tests that reference your SPEC documents."}
+          Logger.info("Stop hook [#{stop_count}]: no tests")
+          {:block, reason: "Code exists but no tests. Create test files in test/ for every module in lib/. Reference doc IDs in test comments (e.g. # Tests SPEC-001)."}
+
+        doc_refs == 0 ->
+          Logger.info("Stop hook [#{stop_count}]: no doc refs in code")
+          {:block, reason: "Code exists but doesn't reference any decision documents. Add doc IDs to @moduledoc:\n\n@moduledoc \"\"\"\nImplements OPP-001: Title\nSee ADR-001: Decision\n\"\"\""}
 
         true ->
+          Logger.info("Stop hook [#{stop_count}]: all checks pass — allowing stop")
           :ok
       end
     end

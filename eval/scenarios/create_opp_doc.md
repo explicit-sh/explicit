@@ -1,7 +1,7 @@
 ---
 name: create-opp-doc
-prompt: "I want to sell llama milk online. Ask me a few questions, then create an opportunity document using explicit docs new opp."
-max_turns: 15
+prompt: "I want to sell llama milk online."
+max_turns: 50
 expect:
   questions_first: true
   min_questions: 1

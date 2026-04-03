@@ -3,7 +3,7 @@ defmodule EvalTest do
 
   @moduletag :eval
 
-  @tag timeout: 300_000
+  @tag timeout: 600_000
   test "create opp doc (simple)" do
     score = Eval.run("create_opp_doc", keep: true)
 
