@@ -398,27 +398,9 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     process.exit(term.Exited);
 }
 
-/// Check if devenv.nix exists in CWD or any parent directory
-fn hasDevenvNix(allocator: mem.Allocator) bool {
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
-    const cwd = std.process.getCwd(&path_buf) catch return false;
-    var dir = allocator.dupe(u8, cwd) catch return false;
-    defer allocator.free(dir);
-
-    while (true) {
-        const devenv_path = std.fmt.allocPrint(allocator, "{s}/devenv.nix", .{dir}) catch return false;
-        defer allocator.free(devenv_path);
-
-        if (fs.accessAbsolute(devenv_path, .{})) {
-            return true;
-        } else |_| {}
-
-        const parent = std.fs.path.dirname(dir) orelse return false;
-        if (mem.eql(u8, parent, dir)) return false;
-        const parent_owned = allocator.dupe(u8, parent) catch return false;
-        allocator.free(dir);
-        dir = parent_owned;
-    }
+/// Check if devenv.nix exists in CWD
+fn hasDevenvNix(_: mem.Allocator) bool {
+    return if (fs.cwd().statFile("devenv.nix")) |_| true else |_| false;
 }
 
 // ─── Socket helpers ──────────────────────────────────────────────────────────
