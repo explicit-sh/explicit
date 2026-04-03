@@ -57,6 +57,10 @@ pub fn main() !void {
     } else if (mem.eql(u8, command, "gemini")) {
         try cmdLaunchAI(allocator, "gemini", &.{"-i"});
         return;
+    } else if (mem.eql(u8, command, "init") and p0 != null) {
+        // init <name>: create project dir + git init, then start server there
+        try cmdInitNew(allocator, p0.?);
+        return;
     } else if (mem.eql(u8, command, "help") or mem.eql(u8, command, "--help") or mem.eql(u8, command, "-h")) {
         printUsage();
         return;
@@ -279,6 +283,54 @@ fn hookSendQuiet(allocator: mem.Allocator, request: []const u8) !void {
         }
     }
     process.exit(0);
+}
+
+// ─── Init new project ────────────────────────────────────────────────────────
+
+fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
+    var cwd_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = std.process.getCwd(&cwd_buf) catch {
+        stderr().writeAll("Error: Cannot get current directory\n") catch {};
+        process.exit(1);
+    };
+
+    const project_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ cwd, name });
+    defer allocator.free(project_dir);
+
+    // Create project directory
+    fs.makeDirAbsolute(project_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => {
+            stderr().print("Error: Cannot create directory {s}\n", .{name}) catch {};
+            process.exit(1);
+        },
+    };
+
+    stderr().print("Creating {s}...\n", .{name}) catch {};
+
+    // git init
+    {
+        var git = std.process.Child.init(&.{ "git", "init" }, allocator);
+        git.cwd = project_dir;
+        git.stdout_behavior = .Ignore;
+        git.stderr_behavior = .Ignore;
+        _ = git.spawn() catch {};
+        _ = git.wait() catch {};
+    }
+
+    // Create minimal directory structure
+    const dirs = [_][]const u8{
+        "docs", "docs/architecture", "docs/opportunities", "docs/policies",
+        "docs/incidents", "docs/specs", ".explicit", ".claude",
+    };
+    for (dirs) |dir| {
+        const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_dir, dir });
+        defer allocator.free(full);
+        fs.makeDirAbsolute(full) catch {};
+    }
+
+    stderr().print("Created {s}/\n", .{name}) catch {};
+    stderr().writeAll("Next: cd into the project and run 'explicit init' to finish setup.\n") catch {};
 }
 
 // ─── AI launcher ─────────────────────────────────────────────────────────────
