@@ -320,23 +320,24 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
     }
 
-    // Build argv: nono wrap --allow . -- [devenv shell --] tool_name [flags...] prompt
+    // Build argv: [devenv shell --] nono wrap --allow . -- tool_name [flags...] prompt
+    // devenv is outer (needs network for cachix), nono is inner (sandboxes the AI)
     var argv_buf: [20][]const u8 = undefined;
     var argc: usize = 0;
 
-    // nono wrap with sandbox flags
-    argv_buf[argc] = "nono"; argc += 1;
-    argv_buf[argc] = "wrap"; argc += 1;
-    argv_buf[argc] = "--allow"; argc += 1;
-    argv_buf[argc] = "."; argc += 1;
-    argv_buf[argc] = "--"; argc += 1;
-
-    // devenv shell wrapper (if devenv.nix found)
+    // devenv shell wrapper (outer — needs network access for nix/cachix)
     if (has_devenv) {
         argv_buf[argc] = "devenv"; argc += 1;
         argv_buf[argc] = "shell"; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
     }
+
+    // nono wrap with sandbox flags (inner — restricts the AI)
+    argv_buf[argc] = "nono"; argc += 1;
+    argv_buf[argc] = "wrap"; argc += 1;
+    argv_buf[argc] = "--allow"; argc += 1;
+    argv_buf[argc] = "."; argc += 1;
+    argv_buf[argc] = "--"; argc += 1;
 
     // The actual AI tool command
     argv_buf[argc] = tool_name; argc += 1;
@@ -370,7 +371,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().writeAll("Warning: nono not found, running without sandbox.\n") catch {};
         stderr().writeAll("Install: brew install nono\n") catch {};
 
-        // Rebuild argv without nono prefix (but keep devenv if present)
+        // Rebuild without nono (keep devenv outer if present)
         var fallback_buf: [12][]const u8 = undefined;
         var fc: usize = 0;
         if (has_devenv) {
