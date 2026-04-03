@@ -52,7 +52,7 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
-        try cmdLaunchAI(allocator, "claude", &.{"--append-system-prompt"});
+        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt" });
         return;
     } else if (mem.eql(u8, command, "gemini")) {
         try cmdLaunchAI(allocator, "gemini", &.{"-i"});
@@ -312,11 +312,20 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
     defer allocator.free(unescaped);
 
-    stderr().print("Starting {s} with explicit context...\n", .{tool_name}) catch {};
+    stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
 
-    // argv: tool_name + prompt_flag(s) + prompt
-    var argv_buf: [4][]const u8 = undefined;
+    // Build argv: nono wrap --allow . -- tool_name [prompt_flags...] prompt
+    var argv_buf: [16][]const u8 = undefined;
     var argc: usize = 0;
+
+    // nono wrap with sandbox flags
+    argv_buf[argc] = "nono"; argc += 1;
+    argv_buf[argc] = "wrap"; argc += 1;
+    argv_buf[argc] = "--allow"; argc += 1;
+    argv_buf[argc] = "."; argc += 1;
+    argv_buf[argc] = "--"; argc += 1;
+
+    // The actual AI tool command
     argv_buf[argc] = tool_name; argc += 1;
     for (prompt_flag) |flag| {
         argv_buf[argc] = flag; argc += 1;
@@ -343,7 +352,29 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     } else |_| {}
     child.env_map = &env;
 
-    _ = try child.spawn();
+    _ = child.spawn() catch {
+        // nono not installed — fall back to running without sandbox
+        stderr().writeAll("Warning: nono not found, running without sandbox.\n") catch {};
+        stderr().writeAll("Install: brew install nono\n") catch {};
+
+        // Rebuild argv without nono prefix
+        var fallback_buf: [8][]const u8 = undefined;
+        var fc: usize = 0;
+        fallback_buf[fc] = tool_name; fc += 1;
+        for (prompt_flag) |flag| {
+            fallback_buf[fc] = flag; fc += 1;
+        }
+        fallback_buf[fc] = unescaped; fc += 1;
+
+        var fallback = std.process.Child.init(fallback_buf[0..fc], allocator);
+        fallback.stdin_behavior = .Inherit;
+        fallback.stdout_behavior = .Inherit;
+        fallback.stderr_behavior = .Inherit;
+        fallback.env_map = &env;
+        _ = try fallback.spawn();
+        const ft = try fallback.wait();
+        process.exit(ft.Exited);
+    };
     const term = try child.wait();
     process.exit(term.Exited);
 }
