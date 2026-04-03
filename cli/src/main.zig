@@ -279,10 +279,12 @@ fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
         allocator.free(git_path);
         if (found) return dir;
 
+        // dirname returns a slice INTO dir, so dupe parent BEFORE freeing dir
         const parent = std.fs.path.dirname(dir) orelse return dir;
         if (mem.eql(u8, parent, dir)) return dir;
+        const parent_owned = try allocator.dupe(u8, parent);
         allocator.free(dir);
-        dir = try allocator.dupe(u8, parent);
+        dir = parent_owned;
     }
 }
 
