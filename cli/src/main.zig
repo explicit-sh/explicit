@@ -358,6 +358,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     if (has_nono) {
         argv_buf[argc] = "nono"; argc += 1;
         argv_buf[argc] = "wrap"; argc += 1;
+        argv_buf[argc] = "--profile"; argc += 1;
+        argv_buf[argc] = "claude-code"; argc += 1;
         argv_buf[argc] = "--allow"; argc += 1;
         argv_buf[argc] = "."; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
