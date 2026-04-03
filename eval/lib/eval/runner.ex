@@ -51,6 +51,10 @@ defmodule Eval.Runner do
       Logger.info("Session complete: #{length(messages)} messages, #{length(tool_uses)} tools, #{length(questions)} questions in #{duration}ms")
       Logger.info("Tool breakdown: #{inspect(tool_summary)}")
 
+      # Log bash commands
+      bash_cmds = tool_uses |> Enum.filter(&(&1.name == "Bash")) |> Enum.map(&get_in(&1, [:input, "command"]))
+      if bash_cmds != [], do: Logger.info("Bash commands: #{inspect(bash_cmds)}")
+
       %__MODULE__{
         messages: messages,
         tool_uses: tool_uses,

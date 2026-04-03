@@ -20,8 +20,8 @@ defmodule Eval.Scorer do
     test_result = run_tests(workspace)
     quality_result = run_quality(workspace)
 
-    # Check: questions before action
-    write_tools = ["Write", "Edit", "Bash"]
+    # Check: questions before writing code (read-only tools don't count)
+    write_tools = ["Write", "Edit"]
     first_write_idx = Enum.find_index(result.tool_uses, &(&1.name in write_tools))
     first_q_idx = Enum.find_index(result.tool_uses, &(&1.name == "AskUserQuestion"))
 
