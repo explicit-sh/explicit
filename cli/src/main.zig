@@ -299,7 +299,10 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
 
     // Create project directory
     fs.makeDirAbsolute(project_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
+        error.PathAlreadyExists => {
+            stderr().print("Error: Directory {s} already exists.\n", .{name}) catch {};
+            process.exit(1);
+        },
         else => {
             stderr().print("Error: Cannot create directory {s}\n", .{name}) catch {};
             process.exit(1);
