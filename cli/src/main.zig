@@ -51,6 +51,12 @@ pub fn main() !void {
     } else if (mem.eql(u8, command, "hooks")) {
         try cmdHooks(allocator, p0, p1);
         return;
+    } else if (mem.eql(u8, command, "claude")) {
+        try cmdLaunchAI(allocator, "claude", &.{"--append-system-prompt"});
+        return;
+    } else if (mem.eql(u8, command, "gemini")) {
+        try cmdLaunchAI(allocator, "gemini", &.{"-i"});
+        return;
     } else if (mem.eql(u8, command, "help") or mem.eql(u8, command, "--help") or mem.eql(u8, command, "-h")) {
         printUsage();
         return;
@@ -180,6 +186,8 @@ fn printUsage() void {
         \\  explicit test              Run mix test
         \\  explicit violations [file] List code violations
         \\  explicit check <file>      Force re-check a file
+        \\  explicit claude            Launch Claude Code with explicit context
+        \\  explicit gemini            Launch Gemini CLI with explicit context
         \\  explicit stop              Stop the server
         \\
         \\Document commands:
@@ -271,6 +279,73 @@ fn hookSendQuiet(allocator: mem.Allocator, request: []const u8) !void {
         }
     }
     process.exit(0);
+}
+
+// ─── AI launcher ─────────────────────────────────────────────────────────────
+
+fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8) !void {
+    // 1. Connect to server (auto-starts if needed)
+    var stream = try connectToSocket(allocator);
+
+    // 2. Fetch system prompt
+    const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"system_prompt\",\"params\":{{\"tool\":\"{s}\"}}}}\n", .{tool_name});
+    defer allocator.free(req);
+    try stream.writeAll(req);
+
+    var buf: [65536]u8 = undefined;
+    const n = try stream.read(&buf);
+    stream.close();
+
+    if (n == 0) {
+        stderr().writeAll("Error: Empty response from server\n") catch {};
+        process.exit(1);
+    }
+
+    // 3. Extract prompt text from JSON response
+    const response = buf[0..n];
+    const prompt = extractJsonString(response, "\"prompt\":\"") orelse {
+        stderr().writeAll("Error: Could not extract system prompt\n") catch {};
+        process.exit(1);
+    };
+
+    // Unescape \\n to real newlines
+    const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
+    defer allocator.free(unescaped);
+
+    stderr().print("Starting {s} with explicit context...\n", .{tool_name}) catch {};
+
+    // argv: tool_name + prompt_flag(s) + prompt
+    var argv_buf: [4][]const u8 = undefined;
+    var argc: usize = 0;
+    argv_buf[argc] = tool_name; argc += 1;
+    for (prompt_flag) |flag| {
+        argv_buf[argc] = flag; argc += 1;
+    }
+    argv_buf[argc] = unescaped; argc += 1;
+    const argv_slice = argv_buf[0..argc];
+
+    var child = std.process.Child.init(argv_slice, allocator);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+
+    // Add our bin dir to PATH so hooks can find `explicit`
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    var exe_buf: [fs.max_path_bytes]u8 = undefined;
+    if (std.fs.selfExePath(&exe_buf)) |exe_path| {
+        if (std.fs.path.dirname(exe_path)) |exe_dir| {
+            if (env.get("PATH")) |existing_path| {
+                const new_path = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ exe_dir, existing_path });
+                try env.put("PATH", new_path);
+            }
+        }
+    } else |_| {}
+    child.env_map = &env;
+
+    _ = try child.spawn();
+    const term = try child.wait();
+    process.exit(term.Exited);
 }
 
 // ─── Socket helpers ──────────────────────────────────────────────────────────

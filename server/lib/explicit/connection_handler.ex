@@ -74,6 +74,14 @@ defmodule Explicit.ConnectionHandler do
     end
   end
 
+  defp handle_method("system_prompt", %{"tool" => "gemini"}) do
+    Protocol.encode_ok(%{prompt: Explicit.SystemPrompt.gemini()})
+  end
+
+  defp handle_method("system_prompt", _params) do
+    Protocol.encode_ok(%{prompt: Explicit.SystemPrompt.claude()})
+  end
+
   defp handle_method("stop", _params) do
     response = Protocol.encode_ok(%{stopped: true})
     Task.start(fn -> Process.sleep(100); System.stop(0) end)
