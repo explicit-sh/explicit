@@ -312,10 +312,16 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
     defer allocator.free(unescaped);
 
-    stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
+    const has_devenv = hasDevenvNix(allocator);
 
-    // Build argv: nono wrap --allow . -- tool_name [prompt_flags...] prompt
-    var argv_buf: [16][]const u8 = undefined;
+    if (has_devenv) {
+        stderr().print("Starting {s} with nono sandbox + devenv...\n", .{tool_name}) catch {};
+    } else {
+        stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
+    }
+
+    // Build argv: nono wrap --allow . -- [devenv shell --] tool_name [flags...] prompt
+    var argv_buf: [20][]const u8 = undefined;
     var argc: usize = 0;
 
     // nono wrap with sandbox flags
@@ -324,6 +330,13 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     argv_buf[argc] = "--allow"; argc += 1;
     argv_buf[argc] = "."; argc += 1;
     argv_buf[argc] = "--"; argc += 1;
+
+    // devenv shell wrapper (if devenv.nix found)
+    if (has_devenv) {
+        argv_buf[argc] = "devenv"; argc += 1;
+        argv_buf[argc] = "shell"; argc += 1;
+        argv_buf[argc] = "--"; argc += 1;
+    }
 
     // The actual AI tool command
     argv_buf[argc] = tool_name; argc += 1;
@@ -357,9 +370,14 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().writeAll("Warning: nono not found, running without sandbox.\n") catch {};
         stderr().writeAll("Install: brew install nono\n") catch {};
 
-        // Rebuild argv without nono prefix
-        var fallback_buf: [8][]const u8 = undefined;
+        // Rebuild argv without nono prefix (but keep devenv if present)
+        var fallback_buf: [12][]const u8 = undefined;
         var fc: usize = 0;
+        if (has_devenv) {
+            fallback_buf[fc] = "devenv"; fc += 1;
+            fallback_buf[fc] = "shell"; fc += 1;
+            fallback_buf[fc] = "--"; fc += 1;
+        }
         fallback_buf[fc] = tool_name; fc += 1;
         for (prompt_flag) |flag| {
             fallback_buf[fc] = flag; fc += 1;
@@ -377,6 +395,29 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     };
     const term = try child.wait();
     process.exit(term.Exited);
+}
+
+/// Check if devenv.nix exists in CWD or any parent directory
+fn hasDevenvNix(allocator: mem.Allocator) bool {
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = std.process.getCwd(&path_buf) catch return false;
+    var dir = allocator.dupe(u8, cwd) catch return false;
+    defer allocator.free(dir);
+
+    while (true) {
+        const devenv_path = std.fmt.allocPrint(allocator, "{s}/devenv.nix", .{dir}) catch return false;
+        defer allocator.free(devenv_path);
+
+        if (fs.accessAbsolute(devenv_path, .{})) {
+            return true;
+        } else |_| {}
+
+        const parent = std.fs.path.dirname(dir) orelse return false;
+        if (mem.eql(u8, parent, dir)) return false;
+        const parent_owned = allocator.dupe(u8, parent) catch return false;
+        allocator.free(dir);
+        dir = parent_owned;
+    }
 }
 
 // ─── Socket helpers ──────────────────────────────────────────────────────────
