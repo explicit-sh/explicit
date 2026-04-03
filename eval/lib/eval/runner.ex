@@ -46,7 +46,10 @@ defmodule Eval.Runner do
       tool_uses = extract_tool_uses(messages)
       questions = Enum.filter(tool_uses, &(&1.name == "AskUserQuestion"))
 
+      # Log tool summary
+      tool_summary = tool_uses |> Enum.map(& &1.name) |> Enum.frequencies()
       Logger.info("Session complete: #{length(messages)} messages, #{length(tool_uses)} tools, #{length(questions)} questions in #{duration}ms")
+      Logger.info("Tool breakdown: #{inspect(tool_summary)}")
 
       %__MODULE__{
         messages: messages,
@@ -89,31 +92,16 @@ defmodule Eval.Runner do
   end
 
   defp build_system_prompt do
-    """
-    IMPORTANT: This project uses explicit for code quality and decision documentation.
+    # Read system prompt from eval's local copy of the server code
+    server_path = Path.expand("../../../server/lib/explicit/system_prompt.ex", __DIR__)
 
-    ## Workflow
-
-    1. Ask 3-5 clarifying questions using AskUserQuestion — NEVER dump questions as text
-    2. Wait for answers, then ask follow-up if needed
-    3. Use EnterPlanMode for non-trivial changes
-    4. Write code WITH tests, @doc, and @spec for every public function
-    5. Run `explicit quality --json` before finishing — it must be clean
-
-    ## Commands
-
-    explicit quality           # Must be clean before stopping
-    explicit docs new <type>   # Create doc: adr, opp, pol, inc, spec
-    explicit docs validate     # Validate docs
-    explicit violations        # Code violations
-
-    ## Rules
-
-    - Every module in lib/ must have a test file in test/
-    - Every public function must have @doc and @spec
-    - No String.to_atom/1, no float for money, no raw(variable)
-    - Create decision documents for significant choices
-    """
+    if File.exists?(server_path) do
+      # Load and call the module
+      [{mod, _}] = Code.compile_file(server_path)
+      mod.claude()
+    else
+      raise "Cannot find system_prompt.ex at #{server_path}. Run eval from the repo root."
+    end
   end
 
   defp extract_tool_uses(messages) do

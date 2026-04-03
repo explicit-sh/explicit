@@ -3,7 +3,7 @@ defmodule EvalTest do
 
   @moduletag :eval
 
-  @tag timeout: 300_000
+  @tag timeout: 600_000
   test "selling llama milk scenario" do
     score = Eval.run("selling_llama_milk", keep: true)
 

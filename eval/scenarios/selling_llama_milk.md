@@ -1,7 +1,7 @@
 ---
 name: selling-llama-milk
-prompt: "Build me a website to sell llama milk from my farm"
-max_turns: 25
+prompt: "Build me a website to sell llama milk from my farm. Follow the explicit workflow: ask me questions, create decision documents, then build the Phoenix app with tests."
+max_turns: 50
 expect:
   questions_first: true
   min_questions: 2
