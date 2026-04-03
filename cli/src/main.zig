@@ -315,30 +315,45 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     const devenv_dir = findDevenvDir(allocator);
     defer if (devenv_dir) |d| allocator.free(d);
 
-    if (devenv_dir) |d| {
-        stderr().print("Starting {s} with nono sandbox + devenv ({s})...\n", .{ tool_name, d }) catch {};
-    } else {
+    // Check if nono is available
+    const has_nono = blk: {
+        var check = std.process.Child.init(&.{ "nono", "--version" }, allocator);
+        check.stdout_behavior = .Ignore;
+        check.stderr_behavior = .Ignore;
+        _ = check.spawn() catch break :blk false;
+        const t = check.wait() catch break :blk false;
+        break :blk t.Exited == 0;
+    };
+
+    if (devenv_dir != null and has_nono) {
+        stderr().print("Starting {s} with nono sandbox + devenv...\n", .{tool_name}) catch {};
+    } else if (has_nono) {
         stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
+    } else if (devenv_dir != null) {
+        stderr().print("Starting {s} with devenv...\n", .{tool_name}) catch {};
+    } else {
+        stderr().print("Starting {s}...\n", .{tool_name}) catch {};
+    }
+    if (!has_nono) {
+        stderr().writeAll("Warning: nono not found, running without sandbox. Install: brew install nono\n") catch {};
     }
 
-    // Build argv: [devenv shell --directory DIR --] nono wrap --allow . -- tool [flags] prompt
-    // devenv is outer (needs network for cachix), nono is inner (sandboxes the AI)
+    // Build argv: [devenv shell --] [nono wrap --allow . --] tool [flags] prompt
     var argv_buf: [24][]const u8 = undefined;
     var argc: usize = 0;
 
-    // devenv shell wrapper (outer — needs network access for nix/cachix)
     if (devenv_dir != null) {
         argv_buf[argc] = "devenv"; argc += 1;
         argv_buf[argc] = "shell"; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
     }
-
-    // nono wrap with sandbox flags (inner — restricts the AI)
-    argv_buf[argc] = "nono"; argc += 1;
-    argv_buf[argc] = "wrap"; argc += 1;
-    argv_buf[argc] = "--allow"; argc += 1;
-    argv_buf[argc] = "."; argc += 1;
-    argv_buf[argc] = "--"; argc += 1;
+    if (has_nono) {
+        argv_buf[argc] = "nono"; argc += 1;
+        argv_buf[argc] = "wrap"; argc += 1;
+        argv_buf[argc] = "--allow"; argc += 1;
+        argv_buf[argc] = "."; argc += 1;
+        argv_buf[argc] = "--"; argc += 1;
+    }
 
     // The actual AI tool command
     argv_buf[argc] = tool_name; argc += 1;
@@ -372,35 +387,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     } else |_| {}
     child.env_map = &env;
 
-    _ = child.spawn() catch {
-        // nono not installed — fall back to running without sandbox
-        stderr().writeAll("Warning: nono not found, running without sandbox.\n") catch {};
-        stderr().writeAll("Install: brew install nono\n") catch {};
-
-        // Rebuild without nono (keep devenv outer if present)
-        var fallback_buf: [14][]const u8 = undefined;
-        var fc: usize = 0;
-        if (devenv_dir != null) {
-            fallback_buf[fc] = "devenv"; fc += 1;
-            fallback_buf[fc] = "shell"; fc += 1;
-            fallback_buf[fc] = "--"; fc += 1;
-        }
-        fallback_buf[fc] = tool_name; fc += 1;
-        for (prompt_flag) |flag| {
-            fallback_buf[fc] = flag; fc += 1;
-        }
-        fallback_buf[fc] = unescaped; fc += 1;
-
-        var fallback = std.process.Child.init(fallback_buf[0..fc], allocator);
-        fallback.stdin_behavior = .Inherit;
-        fallback.stdout_behavior = .Inherit;
-        fallback.stderr_behavior = .Inherit;
-        fallback.env_map = &env;
-        if (devenv_dir) |d| { fallback.cwd = d; }
-        _ = try fallback.spawn();
-        const ft = try fallback.wait();
-        process.exit(ft.Exited);
-    };
+    _ = try child.spawn();
     const term = try child.wait();
     process.exit(term.Exited);
 }
