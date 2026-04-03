@@ -1,4 +1,4 @@
-.PHONY: build-cli build-cli-release build-server dev debug clean
+.PHONY: build-cli build-cli-release build-server dev debug test test-eval clean
 
 ZIG ?= zig
 # macOS 26 (Tahoe) is too new for Zig's linker — target macOS 15 for compat
@@ -24,6 +24,14 @@ debug: build-cli
 # Dev mode: start server via mix (no release needed)
 dev:
 	cd server && mix deps.get && mix run --no-halt
+
+# Run server tests
+test:
+	cd server && mix test
+
+# Run eval (costs money — needs ANTHROPIC_API_KEY + Ollama or GEMINI_API_KEY)
+test-eval:
+	cd eval && mix test -- --include eval
 
 clean:
 	rm -f cli/explicit cli/main

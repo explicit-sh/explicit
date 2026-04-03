@@ -1,0 +1,1 @@
+{application,eval,[{modules,['Elixir.Eval','Elixir.Eval.Answerer','Elixir.Eval.Runner','Elixir.Eval.Scenario','Elixir.Eval.Scorer','Elixir.Eval.Workspace']},{optional_applications,[]},{applications,[kernel,stdlib,elixir,logger,claude_code,yaml_elixir,jason,req]},{description,"eval"},{registered,[]},{vsn,"0.1.0"}]}.

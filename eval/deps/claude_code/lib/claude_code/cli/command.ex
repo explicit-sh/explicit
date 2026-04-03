@@ -1,0 +1,485 @@
+defmodule ClaudeCode.CLI.Command do
+  @moduledoc """
+  Builds CLI command arguments from validated options.
+
+  This module is the CLI protocol layer responsible for:
+  - Converting Elixir options to CLI flags (`to_cli_args/1`)
+  - Assembling the full argument list for a CLI invocation (`build_args/3`)
+
+  It is used by `ClaudeCode.Adapter.Port` for local subprocess management.
+  """
+
+  alias ClaudeCode.Session.PermissionMode
+
+  require Logger
+
+  @required_flags ["--output-format", "stream-json", "--verbose", "--print"]
+
+  @doc """
+  Builds the full argument list for a CLI invocation.
+
+  Combines required flags, optional `--resume` flag, option-derived CLI flags,
+  and the prompt into a single flat list of strings.
+
+  ## Parameters
+
+    * `prompt` - The user prompt string (appended as the final argument)
+    * `opts`   - Validated option keyword list
+    * `session_id` - Optional session ID for `--resume` (nil to omit)
+
+  ## Examples
+
+      iex> ClaudeCode.CLI.Command.build_args("hello", [model: "opus"], nil)
+      ["--output-format", "stream-json", "--verbose", "--print", "--model", "opus", "hello"]
+
+      iex> ClaudeCode.CLI.Command.build_args("hello", [], "sess-123")
+      ["--output-format", "stream-json", "--verbose", "--print", "--resume", "sess-123", "hello"]
+  """
+  @spec build_args(String.t(), keyword(), String.t() | nil) :: [String.t()]
+  def build_args(prompt, opts, session_id) do
+    resume_args = if session_id, do: ["--resume", session_id], else: []
+    option_args = to_cli_args(opts)
+
+    @required_flags ++ resume_args ++ option_args ++ [prompt]
+  end
+
+  @doc """
+  Converts Elixir options to CLI arguments.
+
+  Ignores internal options like :api_key, :name, and :timeout that are not CLI flags.
+
+  ## Examples
+
+      iex> ClaudeCode.CLI.Command.to_cli_args([system_prompt: "You are helpful"])
+      ["--system-prompt", "You are helpful"]
+
+      iex> ClaudeCode.CLI.Command.to_cli_args([allowed_tools: ["View", "Bash(git:*)"]])
+      ["--allowedTools", "View,Bash(git:*)"]
+  """
+  @spec to_cli_args(keyword()) :: [String.t()]
+  def to_cli_args(opts) do
+    opts
+    |> preprocess_sandbox()
+    |> preprocess_thinking()
+    |> ensure_setting_sources()
+    |> Enum.reduce([], fn {key, value}, acc ->
+      case convert_option(key, value) do
+        {flag, flag_value} -> [flag_value, flag | acc]
+        # Acc is built in reverse (flipped by Enum.reverse at the end),
+        # so multi-entry lists must also be reversed before prepending.
+        flag_entries when is_list(flag_entries) -> Enum.reverse(flag_entries, acc)
+        nil -> acc
+      end
+    end)
+    |> Enum.reverse(build_extra_args(Keyword.get(opts, :extra_args, %{})))
+  end
+
+  # -- Private: option conversion ---------------------------------------------
+
+  defp convert_option(:api_key, _value), do: nil
+  defp convert_option(:name, _value), do: nil
+  defp convert_option(:timeout, _value), do: nil
+  defp convert_option(:hooks, _value), do: nil
+  defp convert_option(:resume, _value), do: nil
+  defp convert_option(:adapter, _value), do: nil
+  defp convert_option(:cli_path, _value), do: nil
+
+  defp convert_option(:fork_session, true) do
+    # Boolean flag without value - return as list to be flattened
+    ["--fork-session"]
+  end
+
+  defp convert_option(:fork_session, false), do: nil
+
+  defp convert_option(:continue, true) do
+    # Boolean flag without value - return as list to be flattened
+    ["--continue"]
+  end
+
+  defp convert_option(:continue, false), do: nil
+
+  defp convert_option(:can_use_tool, nil), do: nil
+  defp convert_option(:can_use_tool, _value), do: {"--permission-prompt-tool", "stdio"}
+
+  defp convert_option(_key, nil), do: nil
+
+  # TypeScript SDK aligned options
+  defp convert_option(:system_prompt, value) do
+    {"--system-prompt", to_string(value)}
+  end
+
+  defp convert_option(:append_system_prompt, value) do
+    {"--append-system-prompt", to_string(value)}
+  end
+
+  defp convert_option(:max_turns, value) do
+    {"--max-turns", to_string(value)}
+  end
+
+  defp convert_option(:max_budget_usd, value) do
+    {"--max-budget-usd", to_string(value)}
+  end
+
+  defp convert_option(:max_thinking_tokens, value) do
+    {"--max-thinking-tokens", to_string(value)}
+  end
+
+  defp convert_option(:effort, value) do
+    {"--effort", to_string(value)}
+  end
+
+  defp convert_option(:agent, value) do
+    {"--agent", to_string(value)}
+  end
+
+  defp convert_option(:betas, value) when is_list(value) do
+    if value == [] do
+      nil
+    else
+      Enum.flat_map(value, fn beta -> ["--betas", to_string(beta)] end)
+    end
+  end
+
+  defp convert_option(:tools, :default) do
+    {"--tools", "default"}
+  end
+
+  defp convert_option(:tools, []) do
+    # Empty list means no built-in tools - CLI accepts "" to disable all
+    {"--tools", ""}
+  end
+
+  defp convert_option(:tools, value) when is_list(value) do
+    tools_csv = Enum.join(value, ",")
+    {"--tools", tools_csv}
+  end
+
+  defp convert_option(:allowed_tools, value) when is_list(value) do
+    tools_csv = Enum.join(value, ",")
+    {"--allowedTools", tools_csv}
+  end
+
+  defp convert_option(:disallowed_tools, value) when is_list(value) do
+    tools_csv = Enum.join(value, ",")
+    {"--disallowedTools", tools_csv}
+  end
+
+  defp convert_option(:cwd, _value) do
+    # cwd is handled internally by changing working directory when spawning CLI process
+    # It's not passed as a CLI flag since the CLI doesn't support --cwd
+    nil
+  end
+
+  defp convert_option(:mcp_config, value) do
+    {"--mcp-config", to_string(value)}
+  end
+
+  defp convert_option(:permission_prompt_tool, value) do
+    {"--permission-prompt-tool", to_string(value)}
+  end
+
+  defp convert_option(:model, value) do
+    {"--model", to_string(value)}
+  end
+
+  defp convert_option(:fallback_model, value) do
+    {"--fallback-model", to_string(value)}
+  end
+
+  defp convert_option(:permission_mode, mode) do
+    {"--permission-mode", PermissionMode.encode(mode)}
+  end
+
+  defp convert_option(:add_dir, value) when is_list(value) do
+    if value == [] do
+      nil
+    else
+      # Return a flat list of alternating flags and values
+      Enum.flat_map(value, fn dir -> ["--add-dir", to_string(dir)] end)
+    end
+  end
+
+  defp convert_option(:output_format, %{type: :json_schema, schema: schema}) when is_map(schema) do
+    json_string = Jason.encode!(schema)
+    {"--json-schema", json_string}
+  end
+
+  defp convert_option(:output_format, _value), do: nil
+
+  defp convert_option(:settings, value) when is_map(value) do
+    json_string = Jason.encode!(value)
+    {"--settings", json_string}
+  end
+
+  defp convert_option(:settings, value) do
+    {"--settings", to_string(value)}
+  end
+
+  defp convert_option(:setting_sources, value) when is_list(value) do
+    sources_csv = Enum.join(value, ",")
+    {"--setting-sources", sources_csv}
+  end
+
+  defp convert_option(:plugins, value) when is_list(value) do
+    if value == [] do
+      nil
+    else
+      # Extract path from each plugin config (string path or map with type: :local)
+      Enum.flat_map(value, fn
+        path when is_binary(path) ->
+          ["--plugin-dir", path]
+
+        %{type: :local, path: path} ->
+          ["--plugin-dir", to_string(path)]
+
+        _other ->
+          []
+      end)
+    end
+  end
+
+  # :agents is sent via the control protocol initialize handshake, not as a CLI flag
+  defp convert_option(:agents, _value), do: nil
+
+  defp convert_option(:mcp_servers, value) when is_map(value) do
+    expanded =
+      Map.new(value, fn
+        {name, module} when is_atom(module) ->
+          {name, expand_mcp_module(name, module, %{})}
+
+        {name, %{module: module} = config} when is_atom(module) ->
+          {name, expand_mcp_module(name, module, config)}
+
+        {name, %{"module" => module} = config} when is_atom(module) ->
+          {name, expand_mcp_module(name, module, config)}
+
+        {name, config} when is_map(config) ->
+          {name, config}
+      end)
+
+    # CLI expects mcpServers wrapper format via --mcp-config flag
+    json_string = Jason.encode!(%{mcpServers: expanded})
+    {"--mcp-config", json_string}
+  end
+
+  defp convert_option(:include_partial_messages, true) do
+    # Boolean flag without value - return as list to be flattened
+    ["--include-partial-messages"]
+  end
+
+  defp convert_option(:include_partial_messages, false), do: nil
+
+  defp convert_option(:replay_user_messages, true) do
+    ["--replay-user-messages"]
+  end
+
+  defp convert_option(:replay_user_messages, false), do: nil
+
+  defp convert_option(:strict_mcp_config, true) do
+    # Boolean flag without value - return as list to be flattened
+    ["--strict-mcp-config"]
+  end
+
+  defp convert_option(:strict_mcp_config, false), do: nil
+
+  defp convert_option(:allow_dangerously_skip_permissions, true) do
+    ["--allow-dangerously-skip-permissions"]
+  end
+
+  defp convert_option(:allow_dangerously_skip_permissions, false), do: nil
+
+  defp convert_option(:dangerously_skip_permissions, true) do
+    ["--dangerously-skip-permissions"]
+  end
+
+  defp convert_option(:dangerously_skip_permissions, false), do: nil
+
+  defp convert_option(:disable_slash_commands, true) do
+    ["--disable-slash-commands"]
+  end
+
+  defp convert_option(:disable_slash_commands, false), do: nil
+
+  defp convert_option(:no_session_persistence, true) do
+    ["--no-session-persistence"]
+  end
+
+  defp convert_option(:no_session_persistence, false), do: nil
+
+  defp convert_option(:session_id, value) do
+    {"--session-id", value}
+  end
+
+  defp convert_option(:file, value) when is_list(value) do
+    if value == [] do
+      nil
+    else
+      Enum.flat_map(value, fn spec -> ["--file", to_string(spec)] end)
+    end
+  end
+
+  defp convert_option(:from_pr, value) do
+    {"--from-pr", to_string(value)}
+  end
+
+  defp convert_option(:debug, true), do: ["--debug"]
+  defp convert_option(:debug, false), do: nil
+
+  defp convert_option(:debug, value) when is_binary(value) do
+    {"--debug", value}
+  end
+
+  defp convert_option(:debug_file, value) do
+    {"--debug-file", to_string(value)}
+  end
+
+  defp convert_option(:input_format, :text) do
+    {"--input-format", "text"}
+  end
+
+  defp convert_option(:input_format, :stream_json) do
+    {"--input-format", "stream-json"}
+  end
+
+  defp convert_option(:worktree, true), do: ["--worktree"]
+  defp convert_option(:worktree, false), do: nil
+
+  defp convert_option(:worktree, name) when is_binary(name) do
+    {"--worktree", name}
+  end
+
+  defp convert_option(:resume_session_at, value) do
+    {"--resume-session-at", to_string(value)}
+  end
+
+  # Internal options - not passed as CLI flags
+  # :sandbox is preprocessed into :settings; :thinking is preprocessed into :max_thinking_tokens
+  # :enable_file_checkpointing is set via env var
+  # :prompt_suggestions and :tool_config are sent via control protocol initialize
+  # :can_use_tool is handled above (maps to --permission-prompt-tool stdio)
+  defp convert_option(:sandbox, _value), do: nil
+  defp convert_option(:thinking, _value), do: nil
+  defp convert_option(:enable_file_checkpointing, _value), do: nil
+  defp convert_option(:control_timeout, _value), do: nil
+  defp convert_option(:callers, _value), do: nil
+  defp convert_option(:stub_name, _value), do: nil
+  defp convert_option(:env, _value), do: nil
+  defp convert_option(:inherit_env, _value), do: nil
+  defp convert_option(:max_buffer_size, _value), do: nil
+  defp convert_option(:extra_args, _value), do: nil
+  defp convert_option(:prompt_suggestions, _value), do: nil
+  defp convert_option(:tool_config, _value), do: nil
+
+  # If this fires, a new option was added to Options but not handled here.
+  defp convert_option(key, _value) do
+    Logger.warning("ClaudeCode.CLI.Command: unknown option #{inspect(key)} — needs a convert_option clause")
+
+    nil
+  end
+
+  # -- Private: extra args conversion ------------------------------------------
+
+  defp build_extra_args(extra_args) when map_size(extra_args) == 0, do: []
+
+  defp build_extra_args(extra_args) do
+    Enum.flat_map(extra_args, fn
+      {flag, true} -> [flag]
+      {flag, value} -> [flag, value]
+    end)
+  end
+
+  # -- Private: setting sources preprocessing ----------------------------------
+
+  # Always send --setting-sources to match Python SDK behavior.
+  # When not explicitly configured, send "" to prevent default loading.
+  defp ensure_setting_sources(opts) do
+    if Keyword.has_key?(opts, :setting_sources) do
+      opts
+    else
+      Keyword.put(opts, :setting_sources, [])
+    end
+  end
+
+  # -- Private: thinking preprocessing ----------------------------------------
+
+  # Resolves :thinking config into :max_thinking_tokens.
+  # :thinking takes precedence over the deprecated :max_thinking_tokens.
+  defp preprocess_thinking(opts) do
+    case Keyword.pop(opts, :thinking) do
+      {nil, opts} ->
+        opts
+
+      {:adaptive, opts} ->
+        resolved = Keyword.get(opts, :max_thinking_tokens) || 32_000
+        Keyword.put(opts, :max_thinking_tokens, resolved)
+
+      {:disabled, opts} ->
+        Keyword.put(opts, :max_thinking_tokens, 0)
+
+      {{:enabled, thinking_opts}, opts} when is_list(thinking_opts) ->
+        Keyword.put(opts, :max_thinking_tokens, Keyword.fetch!(thinking_opts, :budget_tokens))
+
+      {_unknown, opts} ->
+        opts
+    end
+  end
+
+  # -- Private: sandbox preprocessing ----------------------------------------
+
+  defp preprocess_sandbox(opts) do
+    case Keyword.pop(opts, :sandbox) do
+      {nil, opts} ->
+        opts
+
+      {%ClaudeCode.Sandbox{} = sandbox, opts} ->
+        sandbox_map = ClaudeCode.Sandbox.to_settings_map(sandbox)
+        merged = merge_sandbox_into_settings(Keyword.get(opts, :settings), sandbox_map)
+        Keyword.put(opts, :settings, merged)
+    end
+  end
+
+  defp merge_sandbox_into_settings(nil, sandbox_map), do: %{"sandbox" => sandbox_map}
+
+  defp merge_sandbox_into_settings(settings, sandbox_map) when is_map(settings) do
+    Map.put(settings, "sandbox", sandbox_map)
+  end
+
+  defp merge_sandbox_into_settings(json_string, sandbox_map) when is_binary(json_string) do
+    case Jason.decode(json_string) do
+      {:ok, decoded} -> Map.put(decoded, "sandbox", sandbox_map)
+      {:error, _} -> %{"sandbox" => sandbox_map}
+    end
+  end
+
+  # -- Private: MCP module subprocess expansion --------------------------------
+
+  defp expand_subprocess_module(module, config) do
+    # Generate stdio command config for an MCP server module
+    # This allows the CLI to spawn the Elixir app with the MCP server
+    startup_code = "#{inspect(module)}.start_link(transport: :stdio)"
+
+    # Extract custom env from config (supports both atom and string keys)
+    custom_env = config[:env] || config["env"] || %{}
+    merged_env = Map.merge(%{"MIX_ENV" => "prod"}, custom_env)
+
+    %{
+      command: "mix",
+      args: ["run", "--no-halt", "-e", startup_code],
+      env: merged_env
+    }
+  end
+
+  defp expand_mcp_module(name, module, config) do
+    case ClaudeCode.MCP.backend_for(module) do
+      :sdk ->
+        %{type: "sdk", name: name}
+
+      {:subprocess, _backend} ->
+        expand_subprocess_module(module, config)
+
+      :unknown ->
+        raise ArgumentError,
+              "Module #{inspect(module)} passed to :mcp_servers is not a recognized MCP server module"
+    end
+  end
+end

@@ -1,0 +1,79 @@
+defmodule ClaudeCode.Adapter.Test do
+  @moduledoc """
+  Test adapter that delivers mock messages synchronously.
+
+  This adapter retrieves messages from registered stubs in `ClaudeCode.Test`
+  and sends them to the Session. Used for testing applications built on ClaudeCode.
+  """
+
+  @behaviour ClaudeCode.Adapter
+
+  use GenServer
+
+  alias ClaudeCode.Adapter
+
+  # ============================================================================
+  # Client API (Adapter Behaviour)
+  # ============================================================================
+
+  @impl ClaudeCode.Adapter
+  def start_link(session, opts) do
+    GenServer.start_link(__MODULE__, {session, opts})
+  end
+
+  @impl ClaudeCode.Adapter
+  def send_query(adapter, request_id, prompt, opts) do
+    GenServer.cast(adapter, {:query, request_id, prompt, opts})
+    :ok
+  end
+
+  @impl ClaudeCode.Adapter
+  def health(_adapter) do
+    :healthy
+  end
+
+  @impl ClaudeCode.Adapter
+  def stop(adapter) do
+    GenServer.stop(adapter, :normal)
+  end
+
+  @impl ClaudeCode.Adapter
+  def execute(_adapter, m, f, a), do: apply(m, f, a)
+
+  # ============================================================================
+  # Server Callbacks
+  # ============================================================================
+
+  @impl GenServer
+  def init({session, opts}) do
+    stub_name = Keyword.fetch!(opts, :stub_name)
+    # Use callers passed from Session (captured when Session was started from test process)
+    callers = Keyword.get(opts, :callers, [])
+
+    state = %{
+      session: session,
+      stub_name: stub_name,
+      callers: callers
+    }
+
+    # Link to session for lifecycle management
+    Process.link(session)
+    Adapter.notify_status(session, :ready)
+
+    {:ok, state}
+  end
+
+  @impl GenServer
+  def handle_cast({:query, request_id, prompt, opts}, state) do
+    # Get messages from stub via ClaudeCode.Test, using captured callers
+    messages = ClaudeCode.Test.stream(state.stub_name, prompt, opts, state.callers)
+
+    Enum.each(messages, fn msg ->
+      Adapter.notify_message(state.session, request_id, msg)
+    end)
+
+    # No notify_done needed — Session auto-completes on ResultMessage detection.
+
+    {:noreply, state}
+  end
+end
