@@ -36,6 +36,18 @@ defmodule Eval.Runner do
 
       duration = System.monotonic_time(:millisecond) - start_time
 
+      # Debug: log first assistant message structure
+      assistant_msgs = Enum.filter(messages, &(Map.get(&1, :type) == :assistant))
+      if length(assistant_msgs) > 0 do
+        first = hd(assistant_msgs)
+        msg = Map.get(first, :message, %{})
+        Logger.debug("First assistant message keys: #{inspect(Map.keys(msg))}")
+        content = Map.get(msg, :content, Map.get(msg, "content", []))
+        if is_list(content) do
+          Logger.debug("Content block types: #{inspect(Enum.map(content, fn c -> {Map.get(c, :type, Map.get(c, "type", :unknown))} end) |> Enum.take(5))}")
+        end
+      end
+
       # Extract tool uses from messages
       tool_uses = extract_tool_uses(messages)
       questions = Enum.filter(tool_uses, &(&1.name == "AskUserQuestion"))
@@ -96,25 +108,60 @@ defmodule Eval.Runner do
   defp extract_tool_uses(messages) do
     messages
     |> Enum.flat_map(fn msg ->
-      case msg do
-        %{type: "tool_use", name: name, input: input} ->
-          [%{name: name, input: input}]
-        %{"type" => "tool_use", "name" => name, "input" => input} ->
-          [%{name: name, input: input}]
-        _ ->
-          # Try to extract from content blocks
-          extract_from_content(msg)
+      # Handle various message formats from claude_code SDK
+      cond do
+        # Direct tool_use message
+        match?(%{type: "tool_use"}, msg) ->
+          [%{name: Map.get(msg, :name, "unknown"), input: Map.get(msg, :input, %{})}]
+        match?(%{"type" => "tool_use"}, msg) ->
+          [%{name: msg["name"], input: msg["input"] || %{}}]
+
+        # Message with tool_name field (claude_code SDK format)
+        Map.has_key?(msg, :tool_name) ->
+          [%{name: msg.tool_name, input: Map.get(msg, :tool_input, %{})}]
+        is_map(msg) and Map.has_key?(msg, "tool_name") ->
+          [%{name: msg["tool_name"], input: msg["tool_input"] || %{}}]
+
+        # Message with content blocks
+        Map.has_key?(msg, :content) and is_list(msg.content) ->
+          extract_from_content(msg.content)
+        is_map(msg) and is_list(Map.get(msg, "content", nil)) ->
+          extract_from_content(msg["content"])
+
+        # claude_code SDK: assistant message with :message containing :content
+        Map.get(msg, :type) == :assistant ->
+          inner = Map.get(msg, :message, %{})
+          content = Map.get(inner, :content, Map.get(inner, "content", []))
+          if is_list(content), do: extract_from_content(content), else: []
+
+        # Struct with __struct__ field — try to access fields generically
+        is_struct(msg) ->
+          extract_from_struct(msg)
+
+        true -> []
       end
     end)
   end
 
-  defp extract_from_content(%{content: content}) when is_list(content) do
+  defp extract_from_content(content) when is_list(content) do
     Enum.flat_map(content, fn
-      %{type: "tool_use", name: name, input: input} -> [%{name: name, input: input}]
-      %{"type" => "tool_use", "name" => name, "input" => input} -> [%{name: name, input: input}]
+      %{type: :tool_use, name: name} = block -> [%{name: name, input: Map.get(block, :input, %{})}]
+      %{type: "tool_use", name: name} = block -> [%{name: name, input: Map.get(block, :input, %{})}]
+      %{"type" => "tool_use", "name" => name} = block -> [%{name: name, input: block["input"] || %{}}]
       _ -> []
     end)
   end
 
   defp extract_from_content(_), do: []
+
+  defp extract_from_struct(msg) do
+    map = Map.from_struct(msg)
+    cond do
+      Map.has_key?(map, :tool_name) -> [%{name: map.tool_name, input: Map.get(map, :tool_input, %{})}]
+      Map.has_key?(map, :content) and is_list(map.content) -> extract_from_content(map.content)
+      true -> []
+    end
+  rescue
+    _ -> []
+  end
 end

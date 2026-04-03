@@ -6,7 +6,7 @@ defmodule Eval do
 
   alias Eval.{Scenario, Workspace, Runner, Scorer}
 
-  @scenarios_dir Path.join(__DIR__, "../../scenarios")
+  @scenarios_dir Path.join(__DIR__, "../scenarios") |> Path.expand()
 
   @doc "Run a single scenario by name"
   def run(name, opts \\ []) do
