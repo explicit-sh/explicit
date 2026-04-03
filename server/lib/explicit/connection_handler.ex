@@ -136,6 +136,21 @@ defmodule Explicit.ConnectionHandler do
 
   # ─── Init/Scaffold methods ─────────────────────────────────────────────────
 
+  defp handle_method("init", %{"name" => name} = params) do
+    base_dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
+    dir = Path.join(base_dir, name)
+    case Explicit.Init.run_new(dir, name) do
+      {:ok, result} ->
+        Protocol.encode_ok(%{
+          project: result.project,
+          name: result.name,
+          created: result.created
+        })
+      {:error, msg} ->
+        Protocol.encode_error(msg)
+    end
+  end
+
   defp handle_method("init", params) do
     dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
     case Explicit.Init.run(dir) do

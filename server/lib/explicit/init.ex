@@ -6,6 +6,25 @@ defmodule Explicit.Init do
 
   require Logger
 
+  @doc "Create a new project directory, git init it, then initialize explicit"
+  def run_new(project_dir, name) do
+    project_dir = Path.expand(project_dir)
+    File.mkdir_p!(project_dir)
+
+    # git init
+    System.cmd("git", ["init"], cd: project_dir, stderr_to_stdout: true)
+
+    Logger.info("Creating new project #{name} in #{project_dir}")
+
+    created =
+      create_dirs(project_dir) ++
+      create_explicit_config(project_dir, name) ++
+      create_claude_config(project_dir, name) ++
+      create_docs(project_dir, name)
+
+    {:ok, %{project: project_dir, name: name, created: created}}
+  end
+
   @doc "Initialize explicit in the given directory"
   def run(project_dir) do
     project_dir = Path.expand(project_dir)

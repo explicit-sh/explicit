@@ -82,8 +82,15 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
         return try allocator.dupe(u8, "{\"method\":\"sarif\"}\n");
     if (mem.eql(u8, command, "stop"))
         return try allocator.dupe(u8, "{\"method\":\"stop\"}\n");
-    if (mem.eql(u8, command, "init"))
+    if (mem.eql(u8, command, "init")) {
+        if (p0) |name| {
+            // Pass CWD so server creates project relative to where user ran the command
+            var cwd_buf: [fs.max_path_bytes]u8 = undefined;
+            const cwd = try std.process.getCwd(&cwd_buf);
+            return try std.fmt.allocPrint(allocator, "{{\"method\":\"init\",\"params\":{{\"name\":\"{s}\",\"dir\":\"{s}\"}}}}\n", .{ name, cwd });
+        }
         return try allocator.dupe(u8, "{\"method\":\"init\"}\n");
+    }
 
     // violations [file]
     if (mem.eql(u8, command, "violations")) {
