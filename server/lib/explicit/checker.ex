@@ -17,7 +17,10 @@ defmodule Explicit.Checker do
     Explicit.Checks.NoPublicWithoutDoc,
     Explicit.Checks.NoPublicWithoutSpec,
     Explicit.Checks.NoIOInspect,
-    Explicit.Checks.NoMixEnvInRuntime
+    Explicit.Checks.NoMixEnvInRuntime,
+    Explicit.Checks.NoDbQueryInMount,
+    Explicit.Checks.NoListAppend,
+    Explicit.Checks.NoRepoDeleteAll
   ]
 
   @doc "Check a single file and return violations"
