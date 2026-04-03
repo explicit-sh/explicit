@@ -82,6 +82,8 @@ pub fn main() !void {
 /// Build a JSONL request string for the given command + args
 fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, p1: ?[]const u8) !?[]const u8 {
     // Simple commands (no params)
+    if (mem.eql(u8, command, "validate"))
+        return try allocator.dupe(u8, "{\"method\":\"validate\"}\n");
     if (mem.eql(u8, command, "status"))
         return try allocator.dupe(u8, "{\"method\":\"status\"}\n");
     if (mem.eql(u8, command, "quality"))
@@ -185,6 +187,7 @@ fn printUsage() void {
         \\  explicit init              Initialize explicit in current project
         \\  explicit scaffold <name>   Scaffold a full-stack Elixir monorepo
         \\  explicit watch             Start analysis server
+        \\  explicit validate          Validate docs + code (blocks code_paths)
         \\  explicit status            Show server status
         \\  explicit quality           Quality gate report (tests, docs, lint)
         \\  explicit test              Run mix test
@@ -720,7 +723,13 @@ fn printHuman(response: []const u8) !void {
         return;
     }
 
-    // ── quality ─────────────────────────────────────────────────────
+    // ── validate / quality ────────────────────────────────────────
+    if (mem.indexOf(u8, response, "\"clean\":true") != null and
+        mem.indexOf(u8, response, "\"doc_refs_in_code\"") != null)
+    {
+        try out.writeAll("Validate: clean\n");
+        return;
+    }
     if (mem.indexOf(u8, response, "\"clean\":true") != null) {
         try out.writeAll("Quality: clean\n");
         return;

@@ -142,11 +142,11 @@ defmodule Explicit.SystemPrompt do
     - Never use `IO.inspect` in non-test code
     - Never call `Mix.env()` outside config/ files
 
-    ## Linking Direction: Code → Docs (not the other way)
+    ## Linking Direction: Code → Docs
 
-    The tool scans your Elixir code for doc references like OPP-001, ADR-001.
-    Put references in YOUR code — the tool finds them automatically.
-    Do NOT add code_paths to doc frontmatter — that's backwards.
+    Reference doc IDs (OPP-001, ADR-001) in your Elixir code via @moduledoc.
+    The tool scans code automatically to find which docs each module implements.
+    Links go FROM code TO docs — never the other way.
 
     ## Suppression
 

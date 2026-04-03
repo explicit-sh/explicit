@@ -88,6 +88,70 @@ defmodule Explicit.ConnectionHandler do
     response
   end
 
+  # ─── Validate ─────────────────────────────────────────────────────────────
+
+  defp handle_method("validate", _params) do
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+
+    # Validate docs
+    doc_files = Discovery.discover(project_dir, schema)
+    doc_results = Enum.flat_map(doc_files, fn file ->
+      case Document.parse_file(file) do
+        {:ok, doc} ->
+          {:ok, diags} = Validation.validate(doc, schema)
+
+          # Check for code_paths in frontmatter (forbidden — links go code → docs)
+          code_paths_diags = if Map.has_key?(doc.frontmatter, "code_paths") do
+            [{:error, "F010", "Field 'code_paths' is not allowed in frontmatter. Links go from code to docs, not the other way. Remove code_paths and reference doc IDs in your Elixir code instead (e.g. @moduledoc \"Implements #{doc.id}\")."}]
+          else
+            []
+          end
+
+          all_diags = diags ++ code_paths_diags
+          DocStore.put(file, all_diags)
+
+          Enum.map(all_diags, fn {level, code, msg} ->
+            %{file: file, id: doc.id, level: to_string(level), code: code, message: msg}
+          end)
+        {:error, msg} ->
+          [%{file: file, id: nil, level: "error", code: "F000", message: msg}]
+      end
+    end)
+
+    # Validate code
+    code_files = Path.wildcard(Path.join(project_dir, "lib/**/*.ex")) ++
+                 Path.wildcard(Path.join(project_dir, "services/**/lib/**/*.ex"))
+    code_results = Enum.flat_map(code_files, fn file ->
+      case Checker.check_file(file) do
+        {:ok, violations} -> violations
+        _ -> []
+      end
+    end)
+
+    # Project checks
+    project_violations = Checker.project_checks(project_dir)
+
+    # Scan code for doc refs
+    doc_refs = scan_doc_refs(code_files)
+
+    doc_errors = Enum.count(doc_results, &(&1.level == "error"))
+    doc_warnings = Enum.count(doc_results, &(&1.level == "warning"))
+    clean = doc_errors == 0 and length(code_results) == 0 and length(project_violations) == 0
+
+    Protocol.encode_ok(%{
+      clean: clean,
+      doc_errors: doc_errors,
+      doc_warnings: doc_warnings,
+      doc_diagnostics: doc_results,
+      code_violations: length(code_results),
+      violations: code_results,
+      missing_tests: length(project_violations),
+      project_violations: project_violations,
+      doc_refs_in_code: doc_refs
+    })
+  end
+
   # ─── Quality gate ──────────────────────────────────────────────────────────
 
   defp handle_method("quality", _params) do
@@ -538,6 +602,18 @@ defmodule Explicit.ConnectionHandler do
         refs when is_list(refs) and refs != [] -> true
         ref when is_binary(ref) -> true
         _ -> false
+      end
+    end)
+  end
+
+  defp scan_doc_refs(code_files) do
+    pattern = ~r/(ADR|OPP|SPEC|INC|POL)-\d{3}/
+    Enum.flat_map(code_files, fn file ->
+      case File.read(file) do
+        {:ok, content} ->
+          Regex.scan(pattern, content)
+          |> Enum.map(fn [ref | _] -> %{file: file, ref: ref} end)
+        _ -> []
       end
     end)
   end
