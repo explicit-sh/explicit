@@ -1,8 +1,8 @@
 defmodule ExplicitTest do
   use ExUnit.Case
-  doctest Explicit
 
-  test "greets the world" do
-    assert Explicit.hello() == :world
+  test "schema loads from priv" do
+    {:ok, schema} = Explicit.Schema.parse(Explicit.Schema.default_schema())
+    assert length(schema.types) > 0
   end
 end

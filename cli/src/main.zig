@@ -237,14 +237,21 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
     }
 }
 
-/// Stop hook: unified quality gate — checks violations, docs, tests, specs
+/// Stop hook: unified quality gate — checks violations, docs, tests, specs, runs tests
 fn hookClaudeStop(allocator: mem.Allocator) !void {
     const git_root = findGitRoot(allocator) catch { process.exit(0); };
     defer allocator.free(git_root);
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
-    const has_issues = try checkMethod(sock_path, "{\"method\":\"quality\"}\n", "\"clean\":true");
+    var has_issues = false;
+
+    // Check quality (violations + doc errors + missing tests/docs/specs)
+    has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"quality\"}\n", "\"clean\":true");
+
+    // Run mix test
+    has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"test.run\"}\n", "\"passed\":true");
+
     if (has_issues) process.exit(2);
     process.exit(0);
 }
