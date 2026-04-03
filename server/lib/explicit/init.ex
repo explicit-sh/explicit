@@ -481,7 +481,7 @@ defmodule Explicit.Init do
     The explicit quality gate runs automatically via Claude Code's Stop hook.
     You cannot finish until all violations are fixed (or explicitly suppressed).
 
-    ## Checks (14 total)
+    ## Checks (15 total)
 
     | Check | Detects |
     |-------|---------|
@@ -498,6 +498,7 @@ defmodule Explicit.Init do
     | NoDbQueryInMount | Database queries in LiveView mount/3 |
     | NoListAppend | `list ++ [item]` — O(n), use prepend |
     | NoRepoDeleteAll | `Repo.delete_all` without scoped query |
+    | NoCompileTimeAppConfig | `Application.get_env` in module attribute |
     | NoModuleWithoutTest | Modules without test files |
 
     ## Commands

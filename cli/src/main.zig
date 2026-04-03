@@ -255,6 +255,23 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     // Run mix test
     has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"test.run\"}\n", "\"passed\":true");
 
+    // Check mix format
+    {
+        var fmt = std.process.Child.init(&.{ "mix", "format", "--check-formatted" }, allocator);
+        fmt.cwd = git_root;
+        fmt.stdout_behavior = .Ignore;
+        fmt.stderr_behavior = .Pipe;
+        if (fmt.spawn()) |_| {} else |_| {
+            // mix not found, skip
+        }
+        if (fmt.wait()) |term| {
+            if (term.Exited != 0) {
+                stderr().writeAll("Code is not formatted. Run: mix format\n") catch {};
+                has_issues = true;
+            }
+        } else |_| {}
+    }
+
     if (has_issues) process.exit(2);
     process.exit(0);
 }

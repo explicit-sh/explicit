@@ -20,7 +20,8 @@ defmodule Explicit.Checker do
     Explicit.Checks.NoMixEnvInRuntime,
     Explicit.Checks.NoDbQueryInMount,
     Explicit.Checks.NoListAppend,
-    Explicit.Checks.NoRepoDeleteAll
+    Explicit.Checks.NoRepoDeleteAll,
+    Explicit.Checks.NoCompileTimeAppConfig
   ]
 
   @doc "Check a single file and return violations"
