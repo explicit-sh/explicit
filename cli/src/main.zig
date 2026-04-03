@@ -320,8 +320,44 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     }
     const prompt_arg: []const u8 = prompt_path;
 
+    // If devenv.nix exists but we're not inside devenv shell, re-exec through devenv
     const devenv_dir = findDevenvDir(allocator);
     defer if (devenv_dir) |d| allocator.free(d);
+    const in_devenv = std.process.getEnvVarOwned(allocator, "DEVENV_ROOT") catch null;
+    defer if (in_devenv) |v| allocator.free(v);
+
+    if (devenv_dir) |d| {
+        if (in_devenv == null) {
+            // Re-exec ourselves inside devenv shell (interactive, with watcher)
+            stderr().print("Entering devenv shell from {s}...\n", .{d}) catch {};
+
+            // Get path to this binary
+            var exe_buf2: [fs.max_path_bytes]u8 = undefined;
+            const self_path = std.fs.selfExePath(&exe_buf2) catch {
+                stderr().writeAll("Error: cannot find self path\n") catch {};
+                process.exit(1);
+            };
+
+            // Build: devenv shell -- /path/to/explicit claude ...
+            var reexec_buf: [16][]const u8 = undefined;
+            var rc: usize = 0;
+            reexec_buf[rc] = "devenv"; rc += 1;
+            reexec_buf[rc] = "shell"; rc += 1;
+            reexec_buf[rc] = "--"; rc += 1;
+            reexec_buf[rc] = self_path; rc += 1;
+            // Re-add original args (tool_name is derived from command)
+            reexec_buf[rc] = tool_name; rc += 1;
+
+            var reexec = std.process.Child.init(reexec_buf[0..rc], allocator);
+            reexec.stdin_behavior = .Inherit;
+            reexec.stdout_behavior = .Inherit;
+            reexec.stderr_behavior = .Inherit;
+            reexec.cwd = d;
+            _ = try reexec.spawn();
+            const rt = try reexec.wait();
+            process.exit(rt.Exited);
+        }
+    }
 
     // Check if nono is available
     const has_nono = blk: {
@@ -333,28 +369,17 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         break :blk t.Exited == 0;
     };
 
-    if (devenv_dir != null and has_nono) {
-        stderr().print("Starting {s} with nono sandbox + devenv...\n", .{tool_name}) catch {};
-    } else if (has_nono) {
+    if (has_nono) {
         stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
-    } else if (devenv_dir != null) {
-        stderr().print("Starting {s} with devenv...\n", .{tool_name}) catch {};
     } else {
         stderr().print("Starting {s}...\n", .{tool_name}) catch {};
-    }
-    if (!has_nono) {
         stderr().writeAll("Warning: nono not found, running without sandbox. Install: brew install nono\n") catch {};
     }
 
-    // Build argv: [devenv shell --] [nono wrap --allow . --] tool [flags] prompt
+    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] prompt
     var argv_buf: [24][]const u8 = undefined;
     var argc: usize = 0;
 
-    if (devenv_dir != null) {
-        argv_buf[argc] = "devenv"; argc += 1;
-        argv_buf[argc] = "shell"; argc += 1;
-        argv_buf[argc] = "--"; argc += 1;
-    }
     if (has_nono) {
         argv_buf[argc] = "nono"; argc += 1;
         argv_buf[argc] = "wrap"; argc += 1;
