@@ -52,7 +52,7 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
-        try cmdLaunchAI(allocator, "claude", &.{ "--permission-mode", "bypassPermissions", "--append-system-prompt" });
+        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" });
         return;
     } else if (mem.eql(u8, command, "gemini")) {
         try cmdLaunchAI(allocator, "gemini", &.{"-i"});
@@ -308,9 +308,17 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         process.exit(1);
     };
 
-    // Unescape \\n to real newlines
+    // Unescape \\n to real newlines and write to temp file
     const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
     defer allocator.free(unescaped);
+
+    const prompt_path = "/tmp/explicit-system-prompt.txt";
+    {
+        const f = try fs.createFileAbsolute(prompt_path, .{});
+        defer f.close();
+        try f.writeAll(unescaped);
+    }
+    const prompt_arg: []const u8 = prompt_path;
 
     const devenv_dir = findDevenvDir(allocator);
     defer if (devenv_dir) |d| allocator.free(d);
@@ -360,7 +368,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     for (prompt_flag) |flag| {
         argv_buf[argc] = flag; argc += 1;
     }
-    argv_buf[argc] = unescaped; argc += 1;
+    argv_buf[argc] = prompt_arg; argc += 1;
     const argv_slice = argv_buf[0..argc];
 
     var child = std.process.Child.init(argv_slice, allocator);
