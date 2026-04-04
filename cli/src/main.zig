@@ -285,10 +285,13 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     // Run mix test
     has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"test.run\"}\n", "\"passed\":true");
 
+    // Find the mix project dir (services/*/ or project root)
+    const mix_dir = findMixDir(allocator, git_root) orelse git_root;
+
     // Auto-format (don't ask Claude, just do it)
     {
         var fmt = std.process.Child.init(&.{ "mix", "format" }, allocator);
-        fmt.cwd = git_root;
+        fmt.cwd = mix_dir;
         fmt.stdout_behavior = .Ignore;
         fmt.stderr_behavior = .Ignore;
         _ = fmt.spawn() catch {};
@@ -298,7 +301,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     // Compile with warnings-as-errors — report any warnings to Claude
     {
         var compile = std.process.Child.init(&.{ "mix", "compile", "--warnings-as-errors" }, allocator);
-        compile.cwd = git_root;
+        compile.cwd = mix_dir;
         compile.stdout_behavior = .Pipe;
         compile.stderr_behavior = .Pipe;
         if (compile.spawn()) |_| {} else |_| {
@@ -709,6 +712,44 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     _ = try child.spawn();
     const term = try child.wait();
     process.exit(term.Exited);
+}
+
+/// Find the mix project directory. Checks services/*/ first, then project root.
+fn findMixDir(allocator: mem.Allocator, project_dir: []const u8) ?[]const u8 {
+    // Check project root first
+    const root_mix = std.fmt.allocPrint(allocator, "{s}/mix.exs", .{project_dir}) catch return null;
+    if (fs.accessAbsolute(root_mix, .{})) {
+        allocator.free(root_mix);
+        return project_dir;
+    } else |_| {}
+    allocator.free(root_mix);
+
+    // Check services/*/mix.exs
+    const services_dir = std.fmt.allocPrint(allocator, "{s}/services", .{project_dir}) catch return null;
+    defer allocator.free(services_dir);
+
+    var dir = fs.openDirAbsolute(services_dir, .{ .iterate = true }) catch return null;
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind == .directory) {
+            const candidate = std.fmt.allocPrint(allocator, "{s}/services/{s}", .{ project_dir, entry.name }) catch continue;
+            const mix_path = std.fmt.allocPrint(allocator, "{s}/mix.exs", .{candidate}) catch {
+                allocator.free(candidate);
+                continue;
+            };
+            defer allocator.free(mix_path);
+
+            if (fs.accessAbsolute(mix_path, .{})) {
+                return candidate;
+            } else |_| {
+                allocator.free(candidate);
+            }
+        }
+    }
+
+    return null;
 }
 
 /// Find devenv.nix in CWD or parent dirs. Returns the directory path or null.

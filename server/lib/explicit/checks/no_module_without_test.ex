@@ -55,18 +55,15 @@ defmodule Explicit.Checks.NoModuleWithoutTest do
   end
 
   defp find_lib_dir(project_dir) do
-    candidates = [
-      Path.join([project_dir, "services", "elixir", "lib"]),
-      Path.join(project_dir, "lib")
-    ]
+    # Check services/*/lib/ first (monorepo), then project root
+    service_libs = Path.wildcard(Path.join(project_dir, "services/*/lib"))
+    candidates = service_libs ++ [Path.join(project_dir, "lib")]
     Enum.find(candidates, &File.dir?/1)
   end
 
   defp find_test_dir(project_dir) do
-    candidates = [
-      Path.join([project_dir, "services", "elixir", "test"]),
-      Path.join(project_dir, "test")
-    ]
+    service_tests = Path.wildcard(Path.join(project_dir, "services/*/test"))
+    candidates = service_tests ++ [Path.join(project_dir, "test")]
     Enum.find(candidates, &File.dir?/1)
   end
 

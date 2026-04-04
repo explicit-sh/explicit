@@ -22,10 +22,12 @@ defmodule Explicit.TestRunner do
   end
 
   defp find_test_dir(project_dir) do
-    candidates = [
-      Path.join([project_dir, "services", "elixir"]),
-      project_dir
-    ]
+    # Check services/*/ for mix.exs (monorepo), then project root
+    service_dirs = Path.join(project_dir, "services/*/mix.exs")
+    |> Path.wildcard()
+    |> Enum.map(&Path.dirname/1)
+
+    candidates = service_dirs ++ [project_dir]
     Enum.find(candidates, fn dir ->
       File.exists?(Path.join(dir, "mix.exs"))
     end)
