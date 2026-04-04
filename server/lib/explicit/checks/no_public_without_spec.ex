@@ -11,7 +11,8 @@ defmodule Explicit.Checks.NoPublicWithoutSpec do
     param_defaults: [excluded_paths: [
       ~r/_test\.exs$/, ~r/test\//, ~r/mix\.exs$/,
       ~r/endpoint\.ex$/, ~r/telemetry\.ex$/, ~r/gettext\.ex$/,
-      ~r/router\.ex$/, ~r/_web\.ex$/
+      ~r/router\.ex$/, ~r/_web\.ex$/, ~r/_controller\.ex$/, ~r/_html\.ex$/,
+      ~r/_json\.ex$/, ~r/_components\.ex$/, ~r/_live\.ex$/
     ]],
     explanations: [
       check: """
@@ -43,9 +44,10 @@ defmodule Explicit.Checks.NoPublicWithoutSpec do
       if String.contains?(source, "@moduledoc false") do
         []
       else
-        # Skip Phoenix component modules — they use attr/slot for typing
+        # Skip Phoenix component/LiveView modules — they use attr/slot or have callback signatures
         is_component = String.contains?(source, "use Phoenix.Component") or
-                       String.contains?(source, "use Phoenix.LiveComponent")
+                       String.contains?(source, "use Phoenix.LiveComponent") or
+                       String.contains?(source, "use Phoenix.LiveView")
 
         issue_meta = IssueMeta.for(source_file, params)
         lines = String.split(source, "\n")

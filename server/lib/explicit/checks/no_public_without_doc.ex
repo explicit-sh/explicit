@@ -10,7 +10,8 @@ defmodule Explicit.Checks.NoPublicWithoutDoc do
     param_defaults: [excluded_paths: [
       ~r/_test\.exs$/, ~r/test\//, ~r/mix\.exs$/,
       ~r/endpoint\.ex$/, ~r/telemetry\.ex$/, ~r/gettext\.ex$/,
-      ~r/router\.ex$/, ~r/_web\.ex$/
+      ~r/router\.ex$/, ~r/_web\.ex$/, ~r/_controller\.ex$/, ~r/_html\.ex$/,
+      ~r/_json\.ex$/, ~r/_components\.ex$/
     ]],
     explanations: [
       check: """
