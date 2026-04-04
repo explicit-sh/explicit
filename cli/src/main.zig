@@ -763,72 +763,79 @@ fn printHuman(response: []const u8) !void {
         return;
     }
     if (mem.indexOf(u8, response, "\"clean\":true") != null) {
-        try out.writeAll("Quality: clean\n");
+        // Clean — no output needed, hook passes silently
         return;
     }
     if (mem.indexOf(u8, response, "\"clean\":false") != null) {
-        try out.writeAll("## Quality: issues found\n\n");
-        printIfNonZero(out, response, "\"iron_law_violations\":", "- **Iron law violations**") catch {};
-        printIfNonZero(out, response, "\"missing_tests\":", "- **Missing test files**") catch {};
-        printIfNonZero(out, response, "\"missing_docs\":", "- **Missing @doc**") catch {};
-        printIfNonZero(out, response, "\"missing_specs\":", "- **Missing @spec**") catch {};
-        printIfNonZero(out, response, "\"doc_errors\":", "- **Doc validation errors**") catch {};
+        // Build concise summary line — only non-zero categories
+        try out.writeAll("[FAIL] ");
+        var sep: bool = false;
+        inline for (.{
+            .{ "\"iron_law_violations\":", "iron_law" },
+            .{ "\"missing_specs\":", "missing_specs" },
+            .{ "\"missing_docs\":", "missing_docs" },
+            .{ "\"missing_tests\":", "missing_tests" },
+            .{ "\"doc_errors\":", "doc_errors" },
+        }) |pair| {
+            if (extractJsonInt(response, pair[0])) |n| {
+                if (n > 0) {
+                    if (sep) try out.writeAll(", ");
+                    try out.print("{d} {s}", .{ n, pair[1] });
+                    sep = true;
+                }
+            }
+        }
+        try out.writeAll("\n");
 
-        // Print fix instructions
+        // Files (top 5, newest first)
         {
-            var it = mem.splitSequence(u8, response, "\"fix\":[\"");
+            var it = mem.splitSequence(u8, response, "\"file\":\"");
             _ = it.next();
-            if (it.next()) |chunk| {
-                if (mem.indexOf(u8, chunk, "]")) |end| {
-                    try out.writeAll("\n### How to fix\n\n");
-                    var fit = mem.splitSequence(u8, chunk[0..end], "\",\"");
-                    var count: u32 = 0;
-                    while (fit.next()) |f| {
-                        if (count >= 50) {
-                            try out.writeAll("- ...(truncated, fix the above first)\n");
-                            break;
-                        }
-                        const clean = mem.trimRight(u8, mem.trimLeft(u8, f, "\""), "\"");
-                        if (clean.len > 0) {
-                            // Unescape \\n to newlines
-                            var line_it = mem.splitSequence(u8, clean, "\\n");
-                            var first = true;
-                            while (line_it.next()) |line| {
-                                if (first) {
-                                    try out.writeAll("- ");
-                                    first = false;
-                                } else {
-                                    try out.writeAll("\n  ");
-                                }
-                                try out.writeAll(line);
+            var count: u32 = 0;
+            // Skip to the "files" array entries
+            while (it.next()) |chunk| {
+                if (count < 5) {
+                    if (mem.indexOf(u8, chunk, "\"")) |end| {
+                        const file = chunk[0..end];
+                        // Extract issue counts for this file
+                        if (mem.indexOf(u8, chunk, "\"count\":")) |cpos| {
+                            if (extractJsonInt(chunk[cpos..], "\"count\":")) |c| {
+                                try out.print("  {s}: {d} issues\n", .{ file, c });
+                            } else {
+                                try out.print("  {s}\n", .{file});
                             }
-                            try out.writeAll("\n");
-                            count += 1;
+                        } else {
+                            try out.print("  {s}\n", .{file});
                         }
+                        count += 1;
                     }
                 }
             }
         }
 
-        // Print top files with issues
+        // Fix instructions (compact, one line each)
         {
-            var it = mem.splitSequence(u8, response, "\"file\":\"");
+            var it = mem.splitSequence(u8, response, "\"fix\":[\"");
             _ = it.next();
-            var count: u32 = 0;
-            var started = false;
-            while (it.next()) |chunk| {
-                // Only show files from the "files" array (after "files":[)
-                if (!started and mem.indexOf(u8, response, "\"files\":[") != null) {
-                    started = true;
-                    if (count == 0) try out.writeAll("\n### Files to fix (newest first)\n\n");
-                }
-                if (started and count < 10) {
-                    if (mem.indexOf(u8, chunk, "\"")) |end| {
-                        try out.writeAll("- `");
-                        try out.writeAll(chunk[0..end]);
-                        try out.writeAll("`\n");
-                        count += 1;
+            if (it.next()) |chunk| {
+                if (mem.indexOf(u8, chunk, "]")) |end| {
+                    try out.writeAll("Fix: ");
+                    var fit = mem.splitSequence(u8, chunk[0..end], "\",\"");
+                    var first = true;
+                    while (fit.next()) |f| {
+                        const clean = mem.trimRight(u8, mem.trimLeft(u8, f, "\""), "\"");
+                        if (clean.len > 0) {
+                            if (!first) try out.writeAll("; ");
+                            // Take just the first line of each fix
+                            if (mem.indexOf(u8, clean, "\\n")) |nl| {
+                                try out.writeAll(clean[0..nl]);
+                            } else {
+                                try out.writeAll(clean);
+                            }
+                            first = false;
+                        }
                     }
+                    try out.writeAll("\n");
                 }
             }
         }
