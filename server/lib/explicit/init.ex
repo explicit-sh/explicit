@@ -127,9 +127,6 @@ defmodule Explicit.Init do
           # Install deps
           System.cmd("mix", ["deps.get"], cd: service_dir, stderr_to_stdout: true)
 
-          # Create AGENTS.md for the service
-          File.write!(Path.join(service_dir, "AGENTS.md"), service_agents_md(name))
-
           ["services/#{name}/ (Phoenix app)"]
 
         {output, _} ->
@@ -794,36 +791,6 @@ defmodule Explicit.Init do
         }
       }
     }, pretty: true) <> "\n"
-  end
-
-  defp service_agents_md(name) do
-    """
-    # #{name} Phoenix Service
-
-    ## Development
-
-    ```bash
-    devenv shell                    # Enter dev environment (Elixir + PostgreSQL)
-    mix deps.get                    # Install dependencies
-    mix ecto.setup                  # Create DB + run migrations + seeds
-    mix phx.server                  # Start server at http://localhost:4000
-    mix test                        # Run tests
-    ```
-
-    ## Structure
-
-    - `lib/#{name}/` — Business logic (contexts, schemas)
-    - `lib/#{name}_web/` — Web layer (controllers, LiveView, components)
-    - `priv/repo/migrations/` — Database migrations
-    - `test/` — Tests
-
-    ## Patterns
-
-    - Use contexts for business logic, never call Repo from controllers
-    - Database queries go in handle_params, NOT mount (LiveView)
-    - Reference decision docs in @moduledoc: `Implements OPP-001`
-    - Every new context module needs a test file
-    """
   end
 
   defp agents_md(name) do
