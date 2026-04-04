@@ -565,10 +565,14 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         argv_buf[argc] = "wrap"; argc += 1;
         argv_buf[argc] = "--profile"; argc += 1;
         argv_buf[argc] = "claude-code"; argc += 1;
-        // ~/.mix needs $HOME expansion — nono doesn't expand ~
-        const mix_home = try std.fmt.allocPrint(allocator, "{s}/.mix", .{std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp"});
+        // Expand $HOME for paths nono needs
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
+        const mix_home = try std.fmt.allocPrint(allocator, "{s}/.mix", .{home});
+        const mcp_json = try std.fmt.allocPrint(allocator, "{s}/.mcp.json", .{home});
         argv_buf[argc] = "--allow"; argc += 1;
         argv_buf[argc] = mix_home; argc += 1;
+        argv_buf[argc] = "--allow-file"; argc += 1;
+        argv_buf[argc] = mcp_json; argc += 1;
         argv_buf[argc] = "--allow"; argc += 1;
         argv_buf[argc] = "."; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
