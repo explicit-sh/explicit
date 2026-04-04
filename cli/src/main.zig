@@ -417,10 +417,8 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
 
     stderr().print("Creating {s}...\n", .{name}) catch {};
 
-    // git init
+    // git init + devenv init (creates devenv.yaml + bootstrap files)
     runIn(allocator, project_dir, &.{ "git", "init" });
-
-    // devenv init
     runIn(allocator, project_dir, &.{ "devenv", "init" });
 
     // Start server for the new project and run init (schema, hooks, skills)

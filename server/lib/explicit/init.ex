@@ -104,7 +104,10 @@ defmodule Explicit.Init do
   end
 
   defp create_devenv(dir, name) do
-    write_if_missing(dir, "devenv.nix", devenv_nix(name))
+    # Always overwrite — devenv init creates a generic one, we need ours with Elixir + PG
+    path = Path.join(dir, "devenv.nix")
+    File.write!(path, devenv_nix(name))
+    ["devenv.nix"]
   end
 
   defp create_phoenix(dir, name) do
