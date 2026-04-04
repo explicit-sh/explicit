@@ -52,10 +52,10 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
-        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" });
+        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count]);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
-        try cmdLaunchAI(allocator, "gemini", &.{"-i"});
+        try cmdLaunchAI(allocator, "gemini", &.{"-i"}, positional[0..pos_count]);
         return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
         // init <name>: create project dir + git init, then start server there
@@ -479,7 +479,7 @@ fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) vo
 
 // ─── AI launcher ─────────────────────────────────────────────────────────────
 
-fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8) !void {
+fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8, extra_args: []const ?[]const u8) !void {
     // 1. Connect to server (auto-starts if needed)
     var stream = try connectToSocket(allocator);
 
@@ -534,15 +534,20 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
                 process.exit(1);
             };
 
-            // Build: devenv shell -- /path/to/explicit claude ...
-            var reexec_buf: [16][]const u8 = undefined;
+            // Build: devenv shell -- /path/to/explicit claude [extra_args...]
+            var reexec_buf: [24][]const u8 = undefined;
             var rc: usize = 0;
             reexec_buf[rc] = "devenv"; rc += 1;
             reexec_buf[rc] = "shell"; rc += 1;
             reexec_buf[rc] = "--"; rc += 1;
             reexec_buf[rc] = self_path; rc += 1;
-            // Re-add original args (tool_name is derived from command)
             reexec_buf[rc] = tool_name; rc += 1;
+            // Pass through extra args
+            for (extra_args) |ea| {
+                if (ea) |a| {
+                    if (rc < reexec_buf.len) { reexec_buf[rc] = a; rc += 1; }
+                }
+            }
 
             var reexec = std.process.Child.init(reexec_buf[0..rc], allocator);
             reexec.stdin_behavior = .Inherit;
@@ -572,8 +577,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().writeAll("Warning: nono not found, running without sandbox. Install: brew install nono\n") catch {};
     }
 
-    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] prompt
-    var argv_buf: [24][]const u8 = undefined;
+    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] prompt [extra]
+    var argv_buf: [32][]const u8 = undefined;
     var argc: usize = 0;
 
     if (has_nono) {
@@ -592,6 +597,16 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         argv_buf[argc] = flag; argc += 1;
     }
     argv_buf[argc] = prompt_arg; argc += 1;
+
+    // Pass through extra args (e.g. -c, -p "prompt", --model, etc)
+    for (extra_args) |arg| {
+        if (arg) |a| {
+            if (argc < argv_buf.len) {
+                argv_buf[argc] = a;
+                argc += 1;
+            }
+        }
+    }
     const argv_slice = argv_buf[0..argc];
 
     var child = std.process.Child.init(argv_slice, allocator);
