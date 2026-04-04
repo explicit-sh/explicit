@@ -280,7 +280,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     var has_issues = false;
 
     // Check quality (violations + doc errors + missing tests)
-    has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"quality\"}\n", "\"clean\":true");
+    has_issues = has_issues or try checkQuality(sock_path);
 
     // Run mix test
     has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"test.run\"}\n", "\"passed\":true");
@@ -352,6 +352,50 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 
     if (has_issues) process.exit(2);
     process.exit(0);
+}
+
+/// Check quality and output concise summary to stderr. Returns true if issues found.
+fn checkQuality(sock_path: []const u8) !bool {
+    var stream = net.connectUnixSocket(sock_path) catch { return false; };
+    defer stream.close();
+    stream.writeAll("{\"method\":\"quality\"}\n") catch { return false; };
+    var buf: [65536]u8 = undefined;
+    const n = stream.read(&buf) catch { return false; };
+    if (n == 0) return false;
+    const response = buf[0..n];
+    if (mem.indexOf(u8, response, "\"clean\":true") != null) return false;
+
+    // Output concise summary to stderr (what Claude sees)
+    const err = stderr();
+
+    // Count non-zero categories
+    const iron = extractJsonInt(response, "\"iron_law_violations\":") orelse 0;
+    const docs = extractJsonInt(response, "\"missing_docs\":") orelse 0;
+    const tests = extractJsonInt(response, "\"missing_tests\":") orelse 0;
+    const doc_errs = extractJsonInt(response, "\"doc_errors\":") orelse 0;
+
+    err.writeAll("Quality issues: ") catch {};
+    var sep: bool = false;
+    if (iron > 0) { err.print("{d} code violations", .{iron}) catch {}; sep = true; }
+    if (docs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing @doc", .{docs}) catch {}; sep = true; }
+    if (tests > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing tests", .{tests}) catch {}; sep = true; }
+    if (doc_errs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} doc errors", .{doc_errs}) catch {}; }
+    err.writeAll("\n") catch {};
+
+    // Show top 3 files
+    var file_it = mem.splitSequence(u8, response, "\"file\":\"");
+    _ = file_it.next();
+    var count: u32 = 0;
+    while (file_it.next()) |chunk| {
+        if (count < 3) {
+            if (mem.indexOf(u8, chunk, "\"")) |end| {
+                err.print("  {s}\n", .{chunk[0..end]}) catch {};
+                count += 1;
+            }
+        }
+    }
+
+    return true;
 }
 
 /// Send method, check if response contains the "clean" marker. Returns true if issues found.
