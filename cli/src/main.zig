@@ -819,12 +819,72 @@ fn printHuman(response: []const u8) !void {
         return;
     }
     if (mem.indexOf(u8, response, "\"clean\":false") != null) {
-        try out.writeAll("Quality: issues found\n");
-        printIfNonZero(out, response, "\"iron_law_violations\":", "  Iron law violations") catch {};
-        printIfNonZero(out, response, "\"missing_tests\":", "  Missing test files") catch {};
-        printIfNonZero(out, response, "\"missing_docs\":", "  Missing @doc") catch {};
-        printIfNonZero(out, response, "\"missing_specs\":", "  Missing @spec") catch {};
-        printIfNonZero(out, response, "\"doc_errors\":", "  Doc validation errors") catch {};
+        try out.writeAll("## Quality: issues found\n\n");
+        printIfNonZero(out, response, "\"iron_law_violations\":", "- **Iron law violations**") catch {};
+        printIfNonZero(out, response, "\"missing_tests\":", "- **Missing test files**") catch {};
+        printIfNonZero(out, response, "\"missing_docs\":", "- **Missing @doc**") catch {};
+        printIfNonZero(out, response, "\"missing_specs\":", "- **Missing @spec**") catch {};
+        printIfNonZero(out, response, "\"doc_errors\":", "- **Doc validation errors**") catch {};
+
+        // Print fix instructions
+        {
+            var it = mem.splitSequence(u8, response, "\"fix\":[\"");
+            _ = it.next();
+            if (it.next()) |chunk| {
+                if (mem.indexOf(u8, chunk, "]")) |end| {
+                    try out.writeAll("\n### How to fix\n\n");
+                    var fit = mem.splitSequence(u8, chunk[0..end], "\",\"");
+                    var count: u32 = 0;
+                    while (fit.next()) |f| {
+                        if (count >= 50) {
+                            try out.writeAll("- ...(truncated, fix the above first)\n");
+                            break;
+                        }
+                        const clean = mem.trimRight(u8, mem.trimLeft(u8, f, "\""), "\"");
+                        if (clean.len > 0) {
+                            // Unescape \\n to newlines
+                            var line_it = mem.splitSequence(u8, clean, "\\n");
+                            var first = true;
+                            while (line_it.next()) |line| {
+                                if (first) {
+                                    try out.writeAll("- ");
+                                    first = false;
+                                } else {
+                                    try out.writeAll("\n  ");
+                                }
+                                try out.writeAll(line);
+                            }
+                            try out.writeAll("\n");
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print top files with issues
+        {
+            var it = mem.splitSequence(u8, response, "\"file\":\"");
+            _ = it.next();
+            var count: u32 = 0;
+            var started = false;
+            while (it.next()) |chunk| {
+                // Only show files from the "files" array (after "files":[)
+                if (!started and mem.indexOf(u8, response, "\"files\":[") != null) {
+                    started = true;
+                    if (count == 0) try out.writeAll("\n### Files to fix (newest first)\n\n");
+                }
+                if (started and count < 10) {
+                    if (mem.indexOf(u8, chunk, "\"")) |end| {
+                        try out.writeAll("- `");
+                        try out.writeAll(chunk[0..end]);
+                        try out.writeAll("`\n");
+                        count += 1;
+                    }
+                }
+            }
+        }
+
         return;
     }
 

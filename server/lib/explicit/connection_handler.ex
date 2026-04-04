@@ -174,6 +174,25 @@ defmodule Explicit.ConnectionHandler do
     clean = iron_law == 0 and doc_summary.errors == 0 and missing_tests == 0 and
             missing_docs == 0 and missing_specs == 0
 
+    # Build per-file issue list sorted by most recently modified first
+    file_issues = ViolationStore.all()
+    |> Enum.reject(fn {path, _} -> path == "__project__" end)
+    |> Enum.filter(fn {_, vs} -> vs != [] end)
+    |> Enum.map(fn {path, vs} ->
+      mtime = case File.stat(path) do
+        {:ok, %{mtime: mtime}} -> :calendar.datetime_to_gregorian_seconds(mtime)
+        _ -> 0
+      end
+      rel_path = Path.relative_to(path, project_dir)
+      checks = vs |> Enum.map(& &1.check) |> Enum.frequencies()
+      %{file: rel_path, mtime: mtime, issues: checks, count: length(vs)}
+    end)
+    |> Enum.sort_by(& &1.mtime, :desc)
+    |> Enum.take(10)
+
+    # Build actionable fix instructions
+    fix_instructions = build_fix_instructions(iron_law, missing_docs, missing_specs, missing_tests, doc_summary.errors, file_issues)
+
     Protocol.encode_ok(%{
       clean: clean,
       iron_law_violations: iron_law,
@@ -183,6 +202,8 @@ defmodule Explicit.ConnectionHandler do
       doc_errors: doc_summary.errors,
       doc_warnings: doc_summary.warnings,
       total_issues: iron_law + missing_tests + doc_summary.errors,
+      files: file_issues,
+      fix: fix_instructions,
       details: %{
         project_violations: project_violations,
         by_check: code_summary.by_check
@@ -604,6 +625,45 @@ defmodule Explicit.ConnectionHandler do
         _ -> false
       end
     end)
+  end
+
+  defp build_fix_instructions(iron_law, missing_docs, missing_specs, missing_tests, doc_errors, file_issues) do
+    instructions = []
+
+    instructions = if iron_law > 0 do
+      ["Fix #{iron_law} code violation(s): check `explicit violations` for details" | instructions]
+    else
+      instructions
+    end
+
+    instructions = if missing_docs > 0 do
+      top_files = file_issues
+      |> Enum.filter(fn f -> Map.has_key?(f.issues, "NoPublicWithoutDoc") end)
+      |> Enum.take(5)
+      |> Enum.map(fn f -> "  #{f.file} (#{f.issues["NoPublicWithoutDoc"]} functions)" end)
+
+      msg = "Add @doc to #{missing_docs} public function(s). Start with:\n" <> Enum.join(top_files, "\n")
+      [msg | instructions]
+    else
+      instructions
+    end
+
+    instructions = if missing_specs > 0 do
+      top_files = file_issues
+      |> Enum.filter(fn f -> Map.has_key?(f.issues, "NoPublicWithoutSpec") end)
+      |> Enum.take(5)
+      |> Enum.map(fn f -> "  #{f.file} (#{f.issues["NoPublicWithoutSpec"]} functions)" end)
+
+      msg = "Add @spec to #{missing_specs} public function(s). Start with:\n" <> Enum.join(top_files, "\n")
+      [msg | instructions]
+    else
+      instructions
+    end
+
+    instructions = if missing_tests > 0, do: ["Create test files for #{missing_tests} module(s)" | instructions], else: instructions
+    instructions = if doc_errors > 0, do: ["Fix #{doc_errors} doc validation error(s): run `explicit docs validate`" | instructions], else: instructions
+
+    Enum.reverse(instructions)
   end
 
   defp scan_doc_refs(code_files) do
