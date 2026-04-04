@@ -17,6 +17,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // Ensure our binary's directory is in PATH so hooks can find `explicit`
+    ensureSelfInPath(allocator);
+
     var args = try process.argsWithAllocator(allocator);
     defer args.deinit();
 
@@ -209,6 +212,33 @@ fn printUsage() void {
         \\  --json                     Output raw JSON
         \\
     ) catch {};
+}
+
+/// Resolve our binary's directory and store it for child process env injection.
+/// Hooks need `explicit` in PATH — this ensures it's available when launching claude.
+var self_dir_buf: [fs.max_path_bytes]u8 = undefined;
+var self_dir: ?[]const u8 = null;
+
+fn ensureSelfInPath(_: mem.Allocator) void {
+    const exe_path = std.fs.selfExePath(&self_dir_buf) catch return;
+    self_dir = std.fs.path.dirname(exe_path);
+}
+
+/// Get an env map with our binary's directory prepended to PATH
+fn envWithSelfInPath(allocator: mem.Allocator) !std.process.EnvMap {
+    var env = try std.process.getEnvMap(allocator);
+    if (self_dir) |dir| {
+        if (env.get("PATH")) |existing| {
+            // Check if already in PATH
+            var it = mem.splitScalar(u8, existing, ':');
+            while (it.next()) |d| {
+                if (mem.eql(u8, d, dir)) return env;
+            }
+            const new_path = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ dir, existing });
+            try env.put("PATH", new_path);
+        }
+    }
+    return env;
 }
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
@@ -569,18 +599,9 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         child.cwd = d;
     }
 
-    // Add our bin dir to PATH so hooks can find `explicit`
-    var env = try std.process.getEnvMap(allocator);
+    // Ensure our binary's dir is in PATH so hooks can find `explicit`
+    var env = try envWithSelfInPath(allocator);
     defer env.deinit();
-    var exe_buf: [fs.max_path_bytes]u8 = undefined;
-    if (std.fs.selfExePath(&exe_buf)) |exe_path| {
-        if (std.fs.path.dirname(exe_path)) |exe_dir| {
-            if (env.get("PATH")) |existing_path| {
-                const new_path = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ exe_dir, existing_path });
-                try env.put("PATH", new_path);
-            }
-        }
-    } else |_| {}
     child.env_map = &env;
 
     _ = try child.spawn();
@@ -671,7 +692,7 @@ fn connectToSocket(allocator: mem.Allocator) !net.Stream {
 
     var child = std.process.Child.init(&.{ server_bin, "daemon" }, allocator);
     child.pgid = 0;
-    var env = try std.process.getEnvMap(allocator);
+    var env = try envWithSelfInPath(allocator);
     defer env.deinit();
     try env.put("EXPLICIT_PROJECT_DIR", git_root);
     child.env_map = &env;
