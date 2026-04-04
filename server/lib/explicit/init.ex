@@ -50,6 +50,13 @@ defmodule Explicit.Init do
       create_vscode_config(project_dir) ++
       create_infra(project_dir)
 
+    # Scaffold Phoenix if services/ is empty
+    service_dir = Path.join(project_dir, "services/#{name}")
+    unless File.exists?(Path.join(service_dir, "mix.exs")) do
+      phoenix_result = create_phoenix(project_dir, name)
+      Logger.info("Phoenix: #{inspect(phoenix_result)}")
+    end
+
     {:ok, %{project: project_dir, name: name, created: created}}
   end
 
