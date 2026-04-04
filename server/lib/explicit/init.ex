@@ -26,6 +26,10 @@ defmodule Explicit.Init do
       create_vscode_config(project_dir) ++
       create_infra(project_dir)
 
+    # Scaffold Phoenix app
+    phoenix_result = create_phoenix(project_dir, name)
+    Logger.info("Phoenix: #{inspect(phoenix_result)}")
+
     {:ok, %{project: project_dir, name: name, created: created}}
   end
 
@@ -58,6 +62,7 @@ defmodule Explicit.Init do
       .claude/skills/test .claude/skills/elixir-quality .claude/skills/phoenix-patterns
       .vscode
       infra
+      services
     )
 
     for d <- dirs do
@@ -95,6 +100,62 @@ defmodule Explicit.Init do
 
   defp create_devenv(dir, name) do
     write_if_missing(dir, "devenv.nix", devenv_nix(name))
+  end
+
+  defp create_phoenix(dir, name) do
+    service_dir = Path.join(dir, "services/#{name}")
+
+    if File.exists?(Path.join(service_dir, "mix.exs")) do
+      :already_exists
+    else
+      # Install phx_new if needed
+      System.cmd("mix", ["archive.install", "hex", "phx_new", "--force"],
+        stderr_to_stdout: true)
+
+      # Scaffold Phoenix app
+      case System.cmd("mix", ["phx.new", "services/#{name}", "--app", name, "--no-install"],
+             cd: dir, stderr_to_stdout: true) do
+        {_output, 0} ->
+          # Configure Ecto to use devenv PostgreSQL unix socket
+          configure_ecto_socket(service_dir, name)
+
+          # Install deps
+          System.cmd("mix", ["deps.get"], cd: service_dir, stderr_to_stdout: true)
+          :ok
+
+        {output, _} ->
+          Logger.warning("Phoenix scaffold failed: #{String.slice(output, 0, 200)}")
+          {:error, "mix phx.new failed"}
+      end
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp configure_ecto_socket(service_dir, name) do
+    # Replace dev.exs to use unix socket from devenv
+    dev_config = Path.join(service_dir, "config/dev.exs")
+    if File.exists?(dev_config) do
+      content = File.read!(dev_config)
+      updated = content
+      |> String.replace(
+        ~r/username: "postgres",\s*\n\s*password: "postgres",\s*\n\s*hostname: "localhost",/,
+        "socket_dir: System.get_env(\"PGDATA\") || Path.expand(\"../../.devenv/state/postgres\", __DIR__),\n  username: \"postgres\","
+      )
+      File.write!(dev_config, updated)
+    end
+
+    # Replace test.exs similarly
+    test_config = Path.join(service_dir, "config/test.exs")
+    if File.exists?(test_config) do
+      content = File.read!(test_config)
+      updated = content
+      |> String.replace(
+        ~r/username: "postgres",\s*\n\s*password: "postgres",\s*\n\s*hostname: "localhost",/,
+        "socket_dir: System.get_env(\"PGDATA\") || Path.expand(\"../../.devenv/state/postgres\", __DIR__),\n  username: \"postgres\","
+      )
+      File.write!(test_config, updated)
+    end
   end
 
   defp create_infra(dir) do
@@ -652,6 +713,10 @@ defmodule Explicit.Init do
       services.postgres = {
         enable = true;
         listen_addresses = "127.0.0.1";
+        initialDatabases = [
+          { name = "#{name}_dev"; }
+          { name = "#{name}_test"; }
+        ];
       };
 
       packages = [
@@ -663,9 +728,12 @@ defmodule Explicit.Init do
         pkgs.nixd
       ];
 
+      processes.phoenix.exec = "cd services/#{name} && mix phx.server";
+
       enterShell = ''
         echo "#{name} dev environment"
         echo "Elixir $(elixir --version | tail -1)"
+        export PGDATA="$DEVENV_STATE/postgres"
       '';
     }
     """
