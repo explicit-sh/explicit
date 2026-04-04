@@ -270,7 +270,7 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
     }
 }
 
-/// Stop hook: unified quality gate — checks violations, docs, tests, specs, runs tests
+/// Stop hook: quality gate + auto-format + compile warnings
 fn hookClaudeStop(allocator: mem.Allocator) !void {
     const git_root = findGitRoot(allocator) catch { process.exit(0); };
     defer allocator.free(git_root);
@@ -279,27 +279,49 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 
     var has_issues = false;
 
-    // Check quality (violations + doc errors + missing tests/docs/specs)
+    // Check quality (violations + doc errors + missing tests)
     has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"quality\"}\n", "\"clean\":true");
 
     // Run mix test
     has_issues = has_issues or try checkMethod(sock_path, "{\"method\":\"test.run\"}\n", "\"passed\":true");
 
-    // Check mix format
+    // Auto-format (don't ask Claude, just do it)
     {
-        var fmt = std.process.Child.init(&.{ "mix", "format", "--check-formatted" }, allocator);
+        var fmt = std.process.Child.init(&.{ "mix", "format" }, allocator);
         fmt.cwd = git_root;
         fmt.stdout_behavior = .Ignore;
-        fmt.stderr_behavior = .Pipe;
-        if (fmt.spawn()) |_| {} else |_| {
+        fmt.stderr_behavior = .Ignore;
+        _ = fmt.spawn() catch {};
+        _ = fmt.wait() catch {};
+    }
+
+    // Compile with warnings-as-errors — report any warnings to Claude
+    {
+        var compile = std.process.Child.init(&.{ "mix", "compile", "--warnings-as-errors" }, allocator);
+        compile.cwd = git_root;
+        compile.stdout_behavior = .Pipe;
+        compile.stderr_behavior = .Pipe;
+        if (compile.spawn()) |_| {} else |_| {
             // mix not found, skip
+            if (has_issues) process.exit(2);
+            process.exit(0);
         }
-        if (fmt.wait()) |term| {
-            if (term.Exited != 0) {
-                stderr().writeAll("Code is not formatted. Run: mix format\n") catch {};
-                has_issues = true;
+        const term = compile.wait() catch {
+            if (has_issues) process.exit(2);
+            process.exit(0);
+        };
+        if (term.Exited != 0) {
+            // Read stderr for warning messages
+            if (compile.stderr) |pipe| {
+                var buf: [4096]u8 = undefined;
+                const n = pipe.read(&buf) catch 0;
+                if (n > 0) {
+                    stderr().writeAll("Compile warnings:\n") catch {};
+                    stderr().writeAll(buf[0..n]) catch {};
+                }
             }
-        } else |_| {}
+            has_issues = true;
+        }
     }
 
     if (has_issues) process.exit(2);
