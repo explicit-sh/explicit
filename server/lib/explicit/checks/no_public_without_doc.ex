@@ -1,18 +1,24 @@
 defmodule Explicit.Checks.NoPublicWithoutDoc do
   @moduledoc """
   Ensures public functions have @doc attributes.
-  Skips test files, callbacks, and Phoenix-generated functions.
+  Skips: test files, callbacks, Phoenix components (attr/slot), @moduledoc false modules.
   """
 
   use Credo.Check,
     base_priority: :normal,
     category: :readability,
-    param_defaults: [excluded_paths: [~r/_test\.exs$/, ~r/test\//, ~r/mix\.exs$/]],
+    param_defaults: [excluded_paths: [
+      ~r/_test\.exs$/, ~r/test\//, ~r/mix\.exs$/,
+      ~r/endpoint\.ex$/, ~r/telemetry\.ex$/, ~r/gettext\.ex$/,
+      ~r/router\.ex$/, ~r/_web\.ex$/
+    ]],
     explanations: [
       check: """
       Public functions should have @doc explaining their purpose.
       Add @doc "..." before `def function_name`.
       Use @doc false to explicitly mark internal public functions.
+      Phoenix components with attr/slot declarations are recognized as documented.
+      Modules with @moduledoc false are skipped entirely.
       """
     ]
 
@@ -31,10 +37,16 @@ defmodule Explicit.Checks.NoPublicWithoutDoc do
     if Enum.any?(excluded, &Regex.match?(&1, source_file.filename)) do
       []
     else
-      issue_meta = IssueMeta.for(source_file, params)
       source = SourceFile.source(source_file)
-      lines = String.split(source, "\n")
-      find_undocumented_functions(lines, issue_meta)
+
+      # Skip entire module if @moduledoc false
+      if String.contains?(source, "@moduledoc false") do
+        []
+      else
+        issue_meta = IssueMeta.for(source_file, params)
+        lines = String.split(source, "\n")
+        find_undocumented_functions(lines, issue_meta)
+      end
     end
   end
 
@@ -45,12 +57,11 @@ defmodule Explicit.Checks.NoPublicWithoutDoc do
       trimmed = String.trim(line)
 
       cond do
-        String.starts_with?(trimmed, "@doc") ->
-          {true, issues}
-
-        String.starts_with?(trimmed, "@impl") ->
-          # @impl callbacks don't need @doc
-          {true, issues}
+        # @doc, @impl, attr, slot all count as documentation
+        String.starts_with?(trimmed, "@doc") -> {true, issues}
+        String.starts_with?(trimmed, "@impl") -> {true, issues}
+        String.starts_with?(trimmed, "attr ") -> {true, issues}
+        String.starts_with?(trimmed, "slot ") -> {true, issues}
 
         match?("def " <> _, trimmed) and not has_doc ->
           case extract_function_name(trimmed) do
@@ -68,7 +79,8 @@ defmodule Explicit.Checks.NoPublicWithoutDoc do
               end
           end
 
-        String.starts_with?(trimmed, "def ") or String.starts_with?(trimmed, "defp ") ->
+        # Reset doc tracking on new function def (but not on same-name multi-head)
+        String.starts_with?(trimmed, "defp ") ->
           {false, issues}
 
         true ->

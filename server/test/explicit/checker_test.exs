@@ -81,6 +81,48 @@ defmodule Explicit.CheckerTest do
     File.rm!(path)
   end
 
+  test "skips @moduledoc false modules" do
+    path = write_temp("""
+    defmodule Generated do
+      @moduledoc false
+      def helper(x), do: x + 1
+    end
+    """)
+
+    {:ok, violations} = Checker.check_file(path)
+    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutDoc"))
+    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
+    File.rm!(path)
+  end
+
+  test "recognizes Phoenix attr/slot as documentation" do
+    path = write_temp("""
+    defmodule MyAppWeb.CoreComponents do
+      use Phoenix.Component
+
+      attr :type, :string, default: "button"
+      attr :class, :string, default: nil
+      def button(assigns) do
+        ~H\"\"\"
+        <button>{@type}</button>
+        \"\"\"
+      end
+
+      slot :inner_block, required: true
+      def modal(assigns) do
+        ~H\"\"\"
+        <div>{render_slot(@inner_block)}</div>
+        \"\"\"
+      end
+    end
+    """)
+
+    {:ok, violations} = Checker.check_file(path)
+    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutDoc"))
+    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
+    File.rm!(path)
+  end
+
   defp write_temp(content) do
     path = Path.join(System.tmp_dir!(), "explicit_test_#{:rand.uniform(999999)}.ex")
     File.write!(path, content)
