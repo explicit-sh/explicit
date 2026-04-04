@@ -63,7 +63,8 @@ defmodule Explicit.Init do
   end
 
   defp create_explicit_config(dir, name) do
-    write_if_missing(dir, ".explicit/schema.kdl", schema_kdl()) ++
+    # schema.kdl is NOT created — the server uses the built-in default from priv/
+    # Users can create .explicit/schema.kdl to override if needed
     write_if_missing(dir, ".explicit/org.kdl", org_kdl(name))
   end
 
@@ -79,7 +80,7 @@ defmodule Explicit.Init do
   end
 
   defp create_docs(dir, name) do
-    write_if_missing(dir, "docs/README.md", docs_readme(name))
+    write_if_missing(dir, "README.md", docs_readme(name))
   end
 
   defp create_lsp_config(dir) do
