@@ -587,6 +587,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         argv_buf[argc] = "--profile"; argc += 1;
         argv_buf[argc] = "claude-code"; argc += 1;
         argv_buf[argc] = "--allow"; argc += 1;
+        argv_buf[argc] = "~/.mix"; argc += 1;
+        argv_buf[argc] = "--allow"; argc += 1;
         argv_buf[argc] = "."; argc += 1;
         argv_buf[argc] = "--"; argc += 1;
     }
