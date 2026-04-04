@@ -518,6 +518,10 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
             reexec.stdout_behavior = .Inherit;
             reexec.stderr_behavior = .Inherit;
             reexec.cwd = d;
+            // Ensure our binary dir is in PATH for hooks inside devenv shell
+            var reexec_env = try envWithSelfInPath(allocator);
+            defer reexec_env.deinit();
+            reexec.env_map = &reexec_env;
             _ = try reexec.spawn();
             const rt = try reexec.wait();
             process.exit(rt.Exited);
