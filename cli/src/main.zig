@@ -324,6 +324,32 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         }
     }
 
+    // Validate OpenTofu if infra/ exists
+    {
+        const infra_dir = try std.fmt.allocPrint(allocator, "{s}/infra", .{git_root});
+        defer allocator.free(infra_dir);
+        if (fs.accessAbsolute(infra_dir, .{})) {
+            var validate = std.process.Child.init(&.{ "tofu", "validate" }, allocator);
+            validate.cwd = infra_dir;
+            validate.stdout_behavior = .Pipe;
+            validate.stderr_behavior = .Pipe;
+            if (validate.spawn()) |_| {} else |_| {}
+            if (validate.wait()) |term| {
+                if (term.Exited != 0) {
+                    if (validate.stderr) |pipe| {
+                        var buf: [4096]u8 = undefined;
+                        const n = pipe.read(&buf) catch 0;
+                        if (n > 0) {
+                            stderr().writeAll("Terraform validation errors:\n") catch {};
+                            stderr().writeAll(buf[0..n]) catch {};
+                        }
+                    }
+                    has_issues = true;
+                }
+            } else |_| {}
+        } else |_| {}
+    }
+
     if (has_issues) process.exit(2);
     process.exit(0);
 }

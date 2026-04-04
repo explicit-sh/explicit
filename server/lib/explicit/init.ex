@@ -23,7 +23,8 @@ defmodule Explicit.Init do
       create_docs(project_dir, name) ++
       create_lsp_config(project_dir) ++
       create_devenv(project_dir, name) ++
-      create_vscode_config(project_dir)
+      create_vscode_config(project_dir) ++
+      create_infra(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -42,7 +43,8 @@ defmodule Explicit.Init do
       create_docs(project_dir, name) ++
       create_lsp_config(project_dir) ++
       create_devenv(project_dir, name) ++
-      create_vscode_config(project_dir)
+      create_vscode_config(project_dir) ++
+      create_infra(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -55,6 +57,7 @@ defmodule Explicit.Init do
       .claude/skills/opportunity .claude/skills/incident .claude/skills/spec
       .claude/skills/test .claude/skills/elixir-quality .claude/skills/phoenix-patterns
       .vscode
+      infra
     )
 
     for d <- dirs do
@@ -92,6 +95,11 @@ defmodule Explicit.Init do
 
   defp create_devenv(dir, name) do
     write_if_missing(dir, "devenv.nix", devenv_nix(name))
+  end
+
+  defp create_infra(dir) do
+    write_if_missing(dir, "infra/main.tf", infra_main_tf()) ++
+    write_if_missing(dir, "infra/.gitignore", infra_gitignore())
   end
 
   defp create_vscode_config(dir) do
@@ -611,6 +619,23 @@ defmodule Explicit.Init do
     - `Repo.delete_all(Schema)` without a where clause
     - `list ++ [item]` instead of `[item | list]`
     - Controller calling Repo directly (use context)
+    """
+  end
+
+  defp infra_main_tf do
+    """
+    terraform {
+      required_version = ">= 1.0"
+    }
+    """
+  end
+
+  defp infra_gitignore do
+    """
+    .terraform/
+    *.tfstate
+    *.tfstate.backup
+    .terraform.lock.hcl
     """
   end
 
