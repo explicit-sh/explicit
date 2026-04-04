@@ -22,7 +22,8 @@ defmodule Explicit.Init do
       create_claude_config(project_dir, name) ++
       create_docs(project_dir, name) ++
       create_lsp_config(project_dir) ++
-      create_devenv(project_dir, name)
+      create_devenv(project_dir, name) ++
+      create_vscode_config(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -40,7 +41,8 @@ defmodule Explicit.Init do
       create_claude_config(project_dir, name) ++
       create_docs(project_dir, name) ++
       create_lsp_config(project_dir) ++
-      create_devenv(project_dir, name)
+      create_devenv(project_dir, name) ++
+      create_vscode_config(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -52,6 +54,7 @@ defmodule Explicit.Init do
       .explicit .claude .claude/skills .claude/skills/adr
       .claude/skills/opportunity .claude/skills/incident .claude/skills/spec
       .claude/skills/test .claude/skills/elixir-quality .claude/skills/phoenix-patterns
+      .vscode
     )
 
     for d <- dirs do
@@ -89,6 +92,11 @@ defmodule Explicit.Init do
 
   defp create_devenv(dir, name) do
     write_if_missing(dir, "devenv.nix", devenv_nix(name))
+  end
+
+  defp create_vscode_config(dir) do
+    write_if_missing(dir, ".vscode/extensions.json", vscode_extensions()) ++
+    write_if_missing(dir, ".vscode/settings.json", vscode_settings())
   end
 
   defp write_if_missing(dir, rel_path, content) do
@@ -653,6 +661,24 @@ defmodule Explicit.Init do
       '';
     }
     """
+  end
+
+  defp vscode_extensions do
+    Jason.encode!(%{
+      "recommendations" => [
+        "expert-lsp.expert",
+        "phoenixframework.phoenix"
+      ]
+    }, pretty: true) <> "\n"
+  end
+
+  defp vscode_settings do
+    Jason.encode!(%{
+      "expert.path" => "expert",
+      "emmet.includeLanguages" => %{
+        "phoenix-heex" => "html"
+      }
+    }, pretty: true) <> "\n"
   end
 
   defp lsp_json do
