@@ -480,11 +480,14 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     // If devenv.nix exists but we're not inside devenv shell, re-exec through devenv
     const devenv_dir = findDevenvDir(allocator);
     defer if (devenv_dir) |d| allocator.free(d);
-    const in_devenv = std.process.getEnvVarOwned(allocator, "DEVENV_ROOT") catch null;
-    defer if (in_devenv) |v| allocator.free(v);
+    const devenv_root = std.process.getEnvVarOwned(allocator, "DEVENV_ROOT") catch null;
+    defer if (devenv_root) |v| allocator.free(v);
+    const in_nix_shell = std.process.getEnvVarOwned(allocator, "IN_NIX_SHELL") catch null;
+    defer if (in_nix_shell) |v| allocator.free(v);
+    const in_devenv = devenv_root != null or in_nix_shell != null;
 
     if (devenv_dir) |d| {
-        if (in_devenv == null) {
+        if (!in_devenv) {
             // Re-exec ourselves inside devenv shell (interactive, with watcher)
             stderr().print("Entering devenv shell from {s}...\n", .{d}) catch {};
 
