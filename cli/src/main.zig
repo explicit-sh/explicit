@@ -91,6 +91,8 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
         return try allocator.dupe(u8, "{\"method\":\"status\"}\n");
     if (mem.eql(u8, command, "quality"))
         return try allocator.dupe(u8, "{\"method\":\"quality\"}\n");
+    if (mem.eql(u8, command, "refresh"))
+        return try allocator.dupe(u8, "{\"method\":\"refresh\"}\n");
     if (mem.eql(u8, command, "test"))
         return try allocator.dupe(u8, "{\"method\":\"test.run\"}\n");
     if (mem.eql(u8, command, "sarif"))
@@ -381,9 +383,9 @@ fn checkQuality(sock_path: []const u8) !bool {
     var sep: bool = false;
     if (iron > 0) { err.print("{d} code violations", .{iron}) catch {}; sep = true; }
     if (docs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing @doc", .{docs}) catch {}; sep = true; }
-    if (tests > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing tests", .{tests}) catch {}; sep = true; }
+    if (tests > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing tests (lib/foo.ex needs test/foo_test.exs)", .{tests}) catch {}; sep = true; }
     if (doc_errs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} doc errors", .{doc_errs}) catch {}; }
-    err.writeAll("\n") catch {};
+    err.writeAll("\nRun `explicit violations` for full list.\n") catch {};
 
     // Show top 3 files
     var file_it = mem.splitSequence(u8, response, "\"file\":\"");

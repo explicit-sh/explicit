@@ -82,6 +82,19 @@ defmodule Explicit.ConnectionHandler do
     Protocol.encode_ok(%{prompt: Explicit.SystemPrompt.claude()})
   end
 
+  defp handle_method("refresh", _params) do
+    project_dir = Application.get_env(:explicit, :project_dir, ".")
+
+    # Clear caches
+    ViolationStore.clear()
+    DocStore.clear()
+
+    # Re-scan everything
+    Explicit.Watcher.watch(project_dir)
+
+    Protocol.encode_ok(%{refreshed: true})
+  end
+
   defp handle_method("stop", _params) do
     response = Protocol.encode_ok(%{stopped: true})
     Task.start(fn -> Process.sleep(100); System.stop(0) end)

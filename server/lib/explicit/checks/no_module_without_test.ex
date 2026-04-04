@@ -1,7 +1,7 @@
 defmodule Explicit.Checks.NoModuleWithoutTest do
   @moduledoc """
   Detects Elixir modules in lib/ that have no corresponding test file in test/.
-  This is a project-level check, not a per-file Credo check.
+  Standard Elixir convention: lib/my_app/foo.ex → test/my_app/foo_test.exs
   """
 
   @skip_patterns [
@@ -15,8 +15,14 @@ defmodule Explicit.Checks.NoModuleWithoutTest do
     ~r/layouts\.ex$/,
     ~r/_web\.ex$/,
     ~r/\.html\.ex$/,
+    ~r/_html\.ex$/,
+    ~r/_json\.ex$/,
+    ~r/_controller\.ex$/,
+    ~r/_live\.ex$/,
+    ~r/_components\.ex$/,
     ~r/migration/,
-    ~r/seeds\.exs$/
+    ~r/seeds\.exs$/,
+    ~r/scope\.ex$/
   ]
 
   @doc """
@@ -39,7 +45,6 @@ defmodule Explicit.Checks.NoModuleWithoutTest do
         MapSet.member?(test_files, basename)
       end)
       |> Enum.map(fn file ->
-        basename = Path.basename(file, ".ex")
         rel = Path.relative_to(file, project_dir)
         expected = expected_test_path(rel)
         %{
@@ -55,7 +60,6 @@ defmodule Explicit.Checks.NoModuleWithoutTest do
   end
 
   defp find_lib_dir(project_dir) do
-    # Check services/*/lib/ first (monorepo), then project root
     service_libs = Path.wildcard(Path.join(project_dir, "services/*/lib"))
     candidates = service_libs ++ [Path.join(project_dir, "lib")]
     Enum.find(candidates, &File.dir?/1)
@@ -68,12 +72,17 @@ defmodule Explicit.Checks.NoModuleWithoutTest do
   end
 
   defp skip?(path) do
-    Enum.any?(@skip_patterns, &Regex.match?(&1, path))
+    path_str = to_string(path)
+    Enum.any?(@skip_patterns, &Regex.match?(&1, path_str)) or
+      String.contains?(path_str, "/components/") or
+      String.contains?(path_str, "/plugs/")
   end
 
   defp expected_test_path(lib_path) do
+    # services/stuffix/lib/stuffix/foo.ex → services/stuffix/test/stuffix/foo_test.exs
+    # lib/my_app/foo.ex → test/my_app/foo_test.exs
     lib_path
-    |> String.replace(~r/^(services\/elixir\/)?lib\//, "\\1test/")
+    |> String.replace(~r/^(services\/[^\/]+\/)?lib\//, "\\1test/")
     |> String.replace(~r/\.ex$/, "_test.exs")
   end
 end
