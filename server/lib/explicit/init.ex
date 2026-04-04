@@ -609,6 +609,14 @@ defmodule Explicit.Init do
           ".exs" => "elixir",
           ".heex" => "heex"
         }
+      },
+      "tofu" => %{
+        "command" => "tofu-ls",
+        "args" => ["serve"],
+        "extensionToLanguage" => %{
+          ".tf" => "terraform",
+          ".tfvars" => "terraform-vars"
+        }
       }
     }, pretty: true) <> "\n"
   end

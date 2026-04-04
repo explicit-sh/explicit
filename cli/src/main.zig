@@ -389,6 +389,7 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
             \\    pkgs.tailwindcss
             \\    pkgs.esbuild
             \\    pkgs.opentofu
+            \\    pkgs.opentofu-ls
             \\  ];
             \\
             \\  enterShell = ''

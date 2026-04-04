@@ -202,6 +202,7 @@ defmodule Explicit.Scaffold do
       packages = [
         pkgs.git
         pkgs.opentofu
+        pkgs.opentofu-ls
         pkgs.socat
       ];
 
