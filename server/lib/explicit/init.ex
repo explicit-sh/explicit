@@ -20,7 +20,8 @@ defmodule Explicit.Init do
       create_dirs(project_dir) ++
       create_explicit_config(project_dir, name) ++
       create_claude_config(project_dir, name) ++
-      create_docs(project_dir, name)
+      create_docs(project_dir, name) ++
+      create_lsp_config(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -36,7 +37,8 @@ defmodule Explicit.Init do
       create_dirs(project_dir) ++
       create_explicit_config(project_dir, name) ++
       create_claude_config(project_dir, name) ++
-      create_docs(project_dir, name)
+      create_docs(project_dir, name) ++
+      create_lsp_config(project_dir)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -76,6 +78,10 @@ defmodule Explicit.Init do
 
   defp create_docs(dir, name) do
     write_if_missing(dir, "docs/README.md", docs_readme(name))
+  end
+
+  defp create_lsp_config(dir) do
+    write_if_missing(dir, ".lsp.json", lsp_json())
   end
 
   defp write_if_missing(dir, rel_path, content) do
@@ -591,6 +597,20 @@ defmodule Explicit.Init do
     - `list ++ [item]` instead of `[item | list]`
     - Controller calling Repo directly (use context)
     """
+  end
+
+  defp lsp_json do
+    Jason.encode!(%{
+      "elixir" => %{
+        "command" => "expert",
+        "args" => ["--stdio"],
+        "extensionToLanguage" => %{
+          ".ex" => "elixir",
+          ".exs" => "elixir",
+          ".heex" => "heex"
+        }
+      }
+    }, pretty: true) <> "\n"
   end
 
   defp docs_readme(name) do

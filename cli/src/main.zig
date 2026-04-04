@@ -560,6 +560,21 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         }
     }
 
+    // Check if expert LSP is available
+    {
+        var check = std.process.Child.init(&.{ "expert", "--version" }, allocator);
+        check.stdout_behavior = .Ignore;
+        check.stderr_behavior = .Ignore;
+        const has_expert = if (check.spawn()) |_| blk2: {
+            const t = check.wait() catch break :blk2 false;
+            break :blk2 t.Exited == 0;
+        } else |_| false;
+
+        if (!has_expert) {
+            stderr().writeAll("Warning: expert LSP not found. Install: brew install expert\n") catch {};
+        }
+    }
+
     // Check if nono is available
     const has_nono = blk: {
         var check = std.process.Child.init(&.{ "nono", "--version" }, allocator);
