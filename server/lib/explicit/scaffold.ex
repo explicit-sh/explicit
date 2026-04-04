@@ -59,7 +59,7 @@ defmodule Explicit.Scaffold do
 
   defp create_root_files(dir, name) do
     write_if_missing(dir, ".gitignore", gitignore()) ++
-    write_if_missing(dir, "devenv.nix", devenv_nix(name)) ++
+    # devenv.nix is written by Explicit.Init.run
     write_if_missing(dir, "Makefile", makefile()) ++
     write_if_missing(dir, "CLAUDE.md", claude_md(name)) ++
     write_if_missing(dir, "infrastructure/environments/dev/main.tf", tf_main()) ++
@@ -169,50 +169,6 @@ defmodule Explicit.Scaffold do
     # Misc
     .DS_Store
     *.swp
-    """
-  end
-
-  defp devenv_nix(name) do
-    """
-    { pkgs, lib, config, inputs, ... }:
-
-    let
-      elixir_1_20_rc4 = pkgs.beam28Packages.elixir_1_20.overrideAttrs (old: rec {
-        version = "1.20.0-rc.4";
-        src = pkgs.fetchFromGitHub {
-          owner = "elixir-lang";
-          repo = "elixir";
-          rev = "v${version}";
-          hash = "sha256-sboB+GW3T+t9gEcOGtd6NllmIlyWio1+cgWyyxE+484=";
-        };
-        doCheck = false;
-      });
-    in
-    {
-      languages.elixir = {
-        enable = true;
-        package = elixir_1_20_rc4;
-      };
-
-      languages.erlang = {
-        enable = true;
-        package = pkgs.beam.interpreters.erlang_28;
-      };
-
-      packages = [
-        pkgs.git
-        pkgs.opentofu
-        pkgs.opentofu-ls
-        pkgs.socat
-      ];
-
-      processes.phoenix.exec = "cd services/elixir && mix phx.server";
-
-      enterShell = ''
-        echo "#{name} dev environment"
-        echo "Elixir $(elixir --version | tail -1)"
-      '';
-    }
     """
   end
 

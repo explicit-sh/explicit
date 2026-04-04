@@ -21,7 +21,8 @@ defmodule Explicit.Init do
       create_explicit_config(project_dir, name) ++
       create_claude_config(project_dir, name) ++
       create_docs(project_dir, name) ++
-      create_lsp_config(project_dir)
+      create_lsp_config(project_dir) ++
+      create_devenv(project_dir, name)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -38,7 +39,8 @@ defmodule Explicit.Init do
       create_explicit_config(project_dir, name) ++
       create_claude_config(project_dir, name) ++
       create_docs(project_dir, name) ++
-      create_lsp_config(project_dir)
+      create_lsp_config(project_dir) ++
+      create_devenv(project_dir, name)
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
@@ -82,6 +84,10 @@ defmodule Explicit.Init do
 
   defp create_lsp_config(dir) do
     write_if_missing(dir, ".lsp.json", lsp_json())
+  end
+
+  defp create_devenv(dir, name) do
+    write_if_missing(dir, "devenv.nix", devenv_nix(name))
   end
 
   defp write_if_missing(dir, rel_path, content) do
@@ -596,6 +602,54 @@ defmodule Explicit.Init do
     - `Repo.delete_all(Schema)` without a where clause
     - `list ++ [item]` instead of `[item | list]`
     - Controller calling Repo directly (use context)
+    """
+  end
+
+  defp devenv_nix(name) do
+    """
+    { pkgs, lib, config, inputs, ... }:
+
+    let
+      elixir_1_20_rc4 = pkgs.beam28Packages.elixir_1_20.overrideAttrs (old: rec {
+        version = "1.20.0-rc.4";
+        src = pkgs.fetchFromGitHub {
+          owner = "elixir-lang";
+          repo = "elixir";
+          rev = "v${version}";
+          hash = "sha256-sboB+GW3T+t9gEcOGtd6NllmIlyWio1+cgWyyxE+484=";
+        };
+        doCheck = false;
+      });
+    in
+    {
+      languages.elixir = {
+        enable = true;
+        package = elixir_1_20_rc4;
+      };
+
+      languages.erlang = {
+        enable = true;
+        package = pkgs.beam.interpreters.erlang_28;
+      };
+
+      services.postgres = {
+        enable = true;
+        listen_addresses = "127.0.0.1";
+      };
+
+      packages = [
+        pkgs.git
+        pkgs.tailwindcss
+        pkgs.esbuild
+        pkgs.opentofu
+        pkgs.opentofu-ls
+      ];
+
+      enterShell = ''
+        echo "#{name} dev environment"
+        echo "Elixir $(elixir --version | tail -1)"
+      '';
+    }
     """
   end
 
