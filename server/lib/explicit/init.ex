@@ -643,6 +643,7 @@ defmodule Explicit.Init do
         pkgs.esbuild
         pkgs.opentofu
         pkgs.opentofu-ls
+        pkgs.nixd
       ];
 
       enterShell = ''
@@ -670,6 +671,13 @@ defmodule Explicit.Init do
         "extensionToLanguage" => %{
           ".tf" => "terraform",
           ".tfvars" => "terraform-vars"
+        }
+      },
+      "nix" => %{
+        "command" => "devenv",
+        "args" => ["lsp"],
+        "extensionToLanguage" => %{
+          ".nix" => "nix"
         }
       }
     }, pretty: true) <> "\n"
