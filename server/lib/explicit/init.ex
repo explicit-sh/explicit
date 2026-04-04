@@ -94,7 +94,9 @@ defmodule Explicit.Init do
   end
 
   defp create_docs(dir, name) do
-    write_if_missing(dir, "README.md", docs_readme(name))
+    write_if_missing(dir, "README.md", docs_readme(name)) ++
+    write_if_missing(dir, "CLAUDE.md", "@AGENTS.md\n") ++
+    write_if_missing(dir, "AGENTS.md", agents_md(name))
   end
 
   defp create_lsp_config(dir) do
@@ -124,6 +126,9 @@ defmodule Explicit.Init do
 
           # Install deps
           System.cmd("mix", ["deps.get"], cd: service_dir, stderr_to_stdout: true)
+
+          # Create AGENTS.md for the service
+          File.write!(Path.join(service_dir, "AGENTS.md"), service_agents_md(name))
 
           ["services/#{name}/ (Phoenix app)"]
 
@@ -789,6 +794,62 @@ defmodule Explicit.Init do
         }
       }
     }, pretty: true) <> "\n"
+  end
+
+  defp service_agents_md(name) do
+    """
+    # #{name} Phoenix Service
+
+    ## Development
+
+    ```bash
+    devenv shell                    # Enter dev environment (Elixir + PostgreSQL)
+    mix deps.get                    # Install dependencies
+    mix ecto.setup                  # Create DB + run migrations + seeds
+    mix phx.server                  # Start server at http://localhost:4000
+    mix test                        # Run tests
+    ```
+
+    ## Structure
+
+    - `lib/#{name}/` — Business logic (contexts, schemas)
+    - `lib/#{name}_web/` — Web layer (controllers, LiveView, components)
+    - `priv/repo/migrations/` — Database migrations
+    - `test/` — Tests
+
+    ## Patterns
+
+    - Use contexts for business logic, never call Repo from controllers
+    - Database queries go in handle_params, NOT mount (LiveView)
+    - Reference decision docs in @moduledoc: `Implements OPP-001`
+    - Every new context module needs a test file
+    """
+  end
+
+  defp agents_md(name) do
+    """
+    # #{name}
+
+    ## Services
+
+    - `services/#{name}/` — Phoenix web application. See `services/#{name}/AGENTS.md` for development instructions.
+
+    ## Infrastructure
+
+    - `infra/` — OpenTofu infrastructure code
+
+    ## Documentation
+
+    - `docs/` — Decision documents (ADR, OPP, SPEC, INC)
+    - Use `explicit docs new <type> "Title"` to create documents
+    - Reference doc IDs (OPP-001, ADR-001) in code via `@moduledoc`
+
+    ## Quality
+
+    - `explicit quality` — check code violations, missing tests, doc errors
+    - `explicit validate` — validate docs + code
+    - Stop hook runs automatically: quality + mix test + mix format + mix compile --warnings-as-errors + tofu validate
+    """
   end
 
   defp docs_readme(name) do
