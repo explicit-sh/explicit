@@ -68,11 +68,13 @@ defmodule Explicit.Doc.Document do
     end
   end
 
-  @doc "Extract document ID from file path (e.g., docs/architecture/adr-001.md -> ADR-001)"
+  @doc "Extract document ID from file path (e.g., docs/architecture/adr-001-use-postgres.md -> ADR-001)"
   def path_to_id(path) do
-    path
-    |> Path.basename(".md")
-    |> String.upcase()
+    basename = Path.basename(path, ".md") |> String.upcase()
+    case Regex.run(~r/^([A-Z]+-\d+)/, basename) do
+      [_, id] -> id
+      _ -> basename
+    end
   end
 
   @doc "Extract document type from path (e.g., docs/architecture/adr-001.md -> adr)"

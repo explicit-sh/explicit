@@ -20,7 +20,8 @@ defmodule Explicit.Doc.Template do
     File.mkdir_p!(folder)
 
     id = next_id(folder, type_def.name)
-    filename = "#{String.downcase(id)}.md"
+    slug = title |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
+    filename = "#{String.downcase(id)}-#{slug}.md"
     path = Path.join(folder, filename)
 
     if File.exists?(path) do
@@ -118,11 +119,10 @@ defmodule Explicit.Doc.Template do
       |> Path.wildcard()
       |> Enum.map(&Path.basename(&1, ".md"))
       |> Enum.map(&String.upcase/1)
-      |> Enum.filter(&String.starts_with?(&1, "#{prefix}-"))
-      |> Enum.map(fn name ->
-        case Regex.run(~r/-(\d+)$/, name) do
-          [_, num] -> String.to_integer(num)
-          _ -> 0
+      |> Enum.flat_map(fn name ->
+        case Regex.run(~r/^#{prefix}-(\d+)/, name) do
+          [_, num] -> [String.to_integer(num)]
+          _ -> []
         end
       end)
 
