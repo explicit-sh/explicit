@@ -648,7 +648,9 @@ fn findDevenvDir(allocator: mem.Allocator) ?[]const u8 {
 fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
     var path_buf: [fs.max_path_bytes]u8 = undefined;
     const cwd = std.process.getCwd(&path_buf) catch {
-        stderr().writeAll("Error: Current directory does not exist. cd to a valid directory.\n") catch {};
+        stderr().writeAll("Error: Current directory does not exist.\n") catch {};
+        stderr().writeAll("This happens when the directory was deleted and recreated.\n") catch {};
+        stderr().writeAll("Fix: cd .. && cd $(basename $PWD)\n") catch {};
         process.exit(1);
     };
     var dir = try allocator.dupe(u8, cwd);
