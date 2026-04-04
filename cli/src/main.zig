@@ -91,8 +91,6 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
         return try allocator.dupe(u8, "{\"method\":\"status\"}\n");
     if (mem.eql(u8, command, "quality"))
         return try allocator.dupe(u8, "{\"method\":\"quality\"}\n");
-    if (mem.eql(u8, command, "refresh"))
-        return try allocator.dupe(u8, "{\"method\":\"refresh\"}\n");
     if (mem.eql(u8, command, "test"))
         return try allocator.dupe(u8, "{\"method\":\"test.run\"}\n");
     if (mem.eql(u8, command, "sarif"))

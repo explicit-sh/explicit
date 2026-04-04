@@ -70,17 +70,31 @@ defmodule Explicit.Watcher do
   end
 
   def handle_info(:flush, state) do
+    pending = state.pending_files
+
     # Offload checks to avoid blocking the watcher GenServer mailbox
-    for file <- state.pending_files do
-      Task.start(fn ->
+    Task.start(fn ->
+      for file <- pending do
         if File.exists?(file) do
           check_file(file)
         else
           Explicit.ViolationStore.put(file, [])
           Explicit.DocStore.put(file, [])
         end
+      end
+
+      # Re-run project checks if any test or lib files changed
+      has_test_or_lib = Enum.any?(pending, fn f ->
+        s = to_string(f)
+        String.ends_with?(s, "_test.exs") or
+          (String.contains?(s, "/lib/") and String.ends_with?(s, ".ex"))
       end)
-    end
+
+      if has_test_or_lib do
+        project_dir = Application.get_env(:explicit, :project_dir, ".")
+        Explicit.Checker.project_checks_and_store(project_dir)
+      end
+    end)
 
     {:noreply, %{state | pending_files: MapSet.new(), debounce_timer: nil}}
   end
