@@ -141,29 +141,18 @@ defmodule Explicit.Init do
     _ -> []
   end
 
-  defp configure_ecto_socket(service_dir, name) do
-    # Replace dev.exs to use unix socket from devenv
-    dev_config = Path.join(service_dir, "config/dev.exs")
-    if File.exists?(dev_config) do
-      content = File.read!(dev_config)
-      updated = content
-      |> String.replace(
-        ~r/username: "postgres",\s*\n\s*password: "postgres",\s*\n\s*hostname: "localhost",/,
-        "socket_dir: System.get_env(\"PGDATA\") || Path.expand(\"../../.devenv/state/postgres\", __DIR__),\n  username: \"postgres\","
-      )
-      File.write!(dev_config, updated)
-    end
-
-    # Replace test.exs similarly
-    test_config = Path.join(service_dir, "config/test.exs")
-    if File.exists?(test_config) do
-      content = File.read!(test_config)
-      updated = content
-      |> String.replace(
-        ~r/username: "postgres",\s*\n\s*password: "postgres",\s*\n\s*hostname: "localhost",/,
-        "socket_dir: System.get_env(\"PGDATA\") || Path.expand(\"../../.devenv/state/postgres\", __DIR__),\n  username: \"postgres\","
-      )
-      File.write!(test_config, updated)
+  defp configure_ecto_socket(service_dir, _name) do
+    # devenv postgres listens on 127.0.0.1:5432 with no password
+    # Replace the default password-based config
+    for config_file <- ["config/dev.exs", "config/test.exs"] do
+      path = Path.join(service_dir, config_file)
+      if File.exists?(path) do
+        content = File.read!(path)
+        updated = content
+        |> String.replace("password: \"postgres\",\n", "")
+        |> String.replace("password: \"postgres\"", "")
+        File.write!(path, updated)
+      end
     end
   end
 
