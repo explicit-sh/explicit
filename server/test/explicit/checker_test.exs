@@ -27,23 +27,10 @@ defmodule Explicit.CheckerTest do
     File.rm!(path)
   end
 
-  test "detects missing @spec on public function" do
-    path = write_temp("""
-    defmodule NoSpecs do
-      def exposed(x), do: x + 1
-    end
-    """)
-
-    {:ok, violations} = Checker.check_file(path)
-    assert Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
-    File.rm!(path)
-  end
-
   test "skips private functions" do
     path = write_temp("""
     defmodule Private do
       @doc "Public"
-      @spec public(integer()) :: integer()
       def public(x), do: internal(x)
 
       defp internal(x), do: x + 1
@@ -57,7 +44,7 @@ defmodule Explicit.CheckerTest do
 
   test "respects inline suppression" do
     path = write_temp("""
-    # explicit:disable NoPublicWithoutDoc NoPublicWithoutSpec
+    # explicit:disable NoPublicWithoutDoc
     defmodule Suppressed do
       def exposed(x), do: x + 1
     end
@@ -65,7 +52,6 @@ defmodule Explicit.CheckerTest do
 
     {:ok, violations} = Checker.check_file(path)
     refute Enum.any?(violations, &(&1.check == "NoPublicWithoutDoc"))
-    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
     File.rm!(path)
   end
 
@@ -91,7 +77,6 @@ defmodule Explicit.CheckerTest do
 
     {:ok, violations} = Checker.check_file(path)
     refute Enum.any?(violations, &(&1.check == "NoPublicWithoutDoc"))
-    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
     File.rm!(path)
   end
 
@@ -119,7 +104,6 @@ defmodule Explicit.CheckerTest do
 
     {:ok, violations} = Checker.check_file(path)
     refute Enum.any?(violations, &(&1.check == "NoPublicWithoutDoc"))
-    refute Enum.any?(violations, &(&1.check == "NoPublicWithoutSpec"))
     File.rm!(path)
   end
 

@@ -316,7 +316,8 @@ fn checkMethod(sock_path: []const u8, request: []const u8, clean_marker: []const
     if (n == 0) return false;
     const response = buf[0..n];
     if (mem.indexOf(u8, response, clean_marker) != null) return false;
-    stderr().writeAll(response) catch {};
+    // Format as human-readable instead of dumping raw JSON
+    printHuman(response) catch {};
     return true;
 }
 

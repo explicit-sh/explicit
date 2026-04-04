@@ -15,7 +15,6 @@ defmodule Explicit.Checker do
     Explicit.Checks.NoBareStartLink,
     Explicit.Checks.NoAssignNewForMountValues,
     Explicit.Checks.NoPublicWithoutDoc,
-    Explicit.Checks.NoPublicWithoutSpec,
     Explicit.Checks.NoIOInspect,
     Explicit.Checks.NoMixEnvInRuntime,
     Explicit.Checks.NoDbQueryInMount,

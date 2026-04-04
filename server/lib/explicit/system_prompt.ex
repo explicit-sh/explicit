@@ -105,7 +105,7 @@ defmodule Explicit.SystemPrompt do
     ## Quality Rules (enforced by Stop hook)
 
     - Every module in lib/ must have a test file in test/
-    - Every public function must have @doc and @spec
+    - Every public function must have @doc
     - No String.to_atom/1 (use String.to_existing_atom/1)
     - No float for money fields (use Decimal)
     - No raw(variable) in templates (XSS risk)

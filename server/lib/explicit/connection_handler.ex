@@ -168,11 +168,10 @@ defmodule Explicit.ConnectionHandler do
     all_violations = Enum.flat_map(ViolationStore.all(), fn {_path, vs} -> vs end)
     missing_tests = Enum.count(project_violations)
     missing_docs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutDoc"))
-    missing_specs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutSpec"))
-    iron_law = code_summary.total - missing_docs - missing_specs
+    iron_law = code_summary.total - missing_docs
 
     clean = iron_law == 0 and doc_summary.errors == 0 and missing_tests == 0 and
-            missing_docs == 0 and missing_specs == 0
+            missing_docs == 0
 
     # Build per-file issue list sorted by most recently modified first
     file_issues = ViolationStore.all()
@@ -191,14 +190,14 @@ defmodule Explicit.ConnectionHandler do
     |> Enum.take(10)
 
     # Build actionable fix instructions
-    fix_instructions = build_fix_instructions(iron_law, missing_docs, missing_specs, missing_tests, doc_summary.errors, file_issues)
+    fix_instructions = build_fix_instructions(iron_law, missing_docs, missing_tests, doc_summary.errors, file_issues)
 
     Protocol.encode_ok(%{
       clean: clean,
       iron_law_violations: iron_law,
       missing_tests: missing_tests,
       missing_docs: missing_docs,
-      missing_specs: missing_specs,
+      missing_specs: 0,
       doc_errors: doc_summary.errors,
       doc_warnings: doc_summary.warnings,
       total_issues: iron_law + missing_tests + doc_summary.errors,
@@ -627,7 +626,7 @@ defmodule Explicit.ConnectionHandler do
     end)
   end
 
-  defp build_fix_instructions(iron_law, missing_docs, missing_specs, missing_tests, doc_errors, file_issues) do
+  defp build_fix_instructions(iron_law, missing_docs, missing_tests, doc_errors, file_issues) do
     instructions = []
 
     instructions = if iron_law > 0 do
@@ -643,18 +642,6 @@ defmodule Explicit.ConnectionHandler do
       |> Enum.map(fn f -> "  #{f.file} (#{f.issues["NoPublicWithoutDoc"]} functions)" end)
 
       msg = "Add @doc to #{missing_docs} public function(s). Start with:\n" <> Enum.join(top_files, "\n")
-      [msg | instructions]
-    else
-      instructions
-    end
-
-    instructions = if missing_specs > 0 do
-      top_files = file_issues
-      |> Enum.filter(fn f -> Map.has_key?(f.issues, "NoPublicWithoutSpec") end)
-      |> Enum.take(5)
-      |> Enum.map(fn f -> "  #{f.file} (#{f.issues["NoPublicWithoutSpec"]} functions)" end)
-
-      msg = "Add @spec to #{missing_specs} public function(s). Start with:\n" <> Enum.join(top_files, "\n")
       [msg | instructions]
     else
       instructions
