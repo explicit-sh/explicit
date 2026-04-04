@@ -413,11 +413,59 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
         fs.makeDirAbsolute(full) catch {};
     }
 
-    stderr().print("Created {s}/\n", .{name}) catch {};
-    stderr().writeAll("Next:\n") catch {};
-    stderr().print("  cd {s}\n", .{name}) catch {};
-    stderr().writeAll("  explicit init       # finish setup (schema, hooks, skills)\n") catch {};
-    stderr().writeAll("  explicit claude     # start coding\n") catch {};
+    // Start server for the new project and run init (schema, hooks, skills)
+    const server_bin = findServerBinary(allocator) catch null;
+    if (server_bin) |bin| {
+        defer allocator.free(bin);
+
+        stderr().writeAll("Starting server...\n") catch {};
+
+        var child = std.process.Child.init(&.{ bin, "daemon" }, allocator);
+        child.pgid = 0;
+        var env = std.process.getEnvMap(allocator) catch unreachable;
+        defer env.deinit();
+        env.put("EXPLICIT_PROJECT_DIR", project_dir) catch {};
+        child.env_map = &env;
+        _ = child.spawn() catch {
+            stderr().print("Created {s}/ (server not available — run 'explicit init' inside to finish setup)\n", .{name}) catch {};
+            return;
+        };
+
+        // Wait for socket
+        const new_sock = socketPathForDir(allocator, project_dir) catch {
+            stderr().print("Created {s}/\n", .{name}) catch {};
+            return;
+        };
+        defer allocator.free(new_sock);
+
+        var attempts: u32 = 0;
+        while (attempts < 50) : (attempts += 1) {
+            std.Thread.sleep(200 * std.time.ns_per_ms);
+            if (net.connectUnixSocket(new_sock)) |stream| {
+                // Send init command
+                stream.writeAll("{\"method\":\"init\"}\n") catch {};
+                var buf: [65536]u8 = undefined;
+                const n = stream.read(&buf) catch 0;
+                if (n > 0) {
+                    try printHuman(buf[0..n]);
+                }
+                stream.close();
+
+                // Stop server
+                if (net.connectUnixSocket(new_sock)) |s2| {
+                    s2.writeAll("{\"method\":\"stop\"}\n") catch {};
+                    s2.close();
+                } else |_| {}
+
+                stderr().print("\nReady! Next:\n  cd {s}\n  explicit claude\n", .{name}) catch {};
+                return;
+            } else |_| {}
+        }
+
+        stderr().print("Created {s}/ (server timed out — run 'explicit init' inside to finish)\n", .{name}) catch {};
+    } else {
+        stderr().print("Created {s}/\nNext:\n  cd {s}\n  explicit init\n  explicit claude\n", .{ name, name }) catch {};
+    }
 }
 
 fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) void {
