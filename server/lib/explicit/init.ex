@@ -667,7 +667,8 @@ defmodule Explicit.Init do
     Jason.encode!(%{
       "recommendations" => [
         "expert-lsp.expert",
-        "phoenixframework.phoenix"
+        "phoenixframework.phoenix",
+        "OpenTofu.vscode-opentofu"
       ]
     }, pretty: true) <> "\n"
   end
