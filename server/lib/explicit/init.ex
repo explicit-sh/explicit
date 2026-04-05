@@ -127,6 +127,9 @@ defmodule Explicit.Init do
           # Configure Ecto to use devenv PostgreSQL unix socket
           configure_ecto_socket(service_dir, name)
 
+          # Add test coverage threshold
+          configure_test_coverage(service_dir)
+
           # Install deps
           System.cmd("mix", ["deps.get"], cd: service_dir, stderr_to_stdout: true)
 
@@ -143,7 +146,9 @@ defmodule Explicit.Init do
 
   defp configure_ecto_socket(service_dir, _name) do
     # devenv postgres listens on 127.0.0.1:5432 with no password
-    # Replace the default password-based config
+    # Role matches OS username, not "postgres"
+    whoami = System.get_env("USER") || "postgres"
+
     for config_file <- ["config/dev.exs", "config/test.exs"] do
       path = Path.join(service_dir, config_file)
       if File.exists?(path) do
@@ -151,7 +156,22 @@ defmodule Explicit.Init do
         updated = content
         |> String.replace("password: \"postgres\",\n", "")
         |> String.replace("password: \"postgres\"", "")
+        |> String.replace("username: \"postgres\"", "username: \"#{whoami}\"")
         File.write!(path, updated)
+      end
+    end
+  end
+
+  defp configure_test_coverage(service_dir) do
+    mix_exs = Path.join(service_dir, "mix.exs")
+    if File.exists?(mix_exs) do
+      content = File.read!(mix_exs)
+      unless String.contains?(content, "test_coverage") do
+        updated = String.replace(content,
+          "deps: deps()",
+          "deps: deps(),\n      test_coverage: [threshold: 90]"
+        )
+        File.write!(mix_exs, updated)
       end
     end
   end
@@ -569,7 +589,7 @@ defmodule Explicit.Init do
     The explicit quality gate runs automatically via Claude Code's Stop hook.
     You cannot finish until all violations are fixed (or explicitly suppressed).
 
-    ## Checks (15 total)
+    ## Checks
 
     | Check | Detects |
     |-------|---------|
@@ -580,14 +600,16 @@ defmodule Explicit.Init do
     | NoBareStartLink | Unsupervised GenServer/Agent |
     | NoAssignNewForMountValues | `assign_new` for per-mount keys |
     | NoPublicWithoutDoc | Public functions missing @doc |
-    | NoPublicWithoutSpec | Public functions missing @spec |
     | NoIOInspect | `IO.inspect` in production code |
     | NoMixEnvInRuntime | `Mix.env()` outside config/ |
     | NoDbQueryInMount | Database queries in LiveView mount/3 |
     | NoListAppend | `list ++ [item]` — O(n), use prepend |
     | NoRepoDeleteAll | `Repo.delete_all` without scoped query |
     | NoCompileTimeAppConfig | `Application.get_env` in module attribute |
-    | NoModuleWithoutTest | Modules without test files |
+    | NoTestInLibDir | Test files in lib/ instead of test/ |
+    | NoDuplicateMigrationTimestamps | Migrations sharing same timestamp |
+
+    Coverage enforced via `mix test --cover` with threshold in mix.exs (default 90%).
 
     ## Commands
 
@@ -715,6 +737,7 @@ defmodule Explicit.Init do
           { name = "#{name}_dev"; }
           { name = "#{name}_test"; }
         ];
+        initialScript = "CREATE ROLE postgres WITH LOGIN SUPERUSER;";
       };
 
       packages = [
@@ -802,6 +825,13 @@ defmodule Explicit.Init do
     - `docs/` — Decision documents (ADR, OPP, SPEC, INC)
     - Use `explicit docs new <type> "Title"` to create documents
     - Reference doc IDs (OPP-001, ADR-001) in code via `@moduledoc`
+
+    ## Testing
+
+    - Tests go in `test/` (standard Elixir convention), NEVER in `lib/`
+    - Example: `lib/#{name}/accounts.ex` → `test/#{name}/accounts_test.exs`
+    - Coverage threshold: 90% (enforced by stop hook via `mix test --cover`)
+    - Run tests: `cd services/#{name} && mix test`
 
     ## Quality
 

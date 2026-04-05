@@ -11,7 +11,7 @@ defmodule Explicit.Checks.NoPublicWithoutDoc do
       ~r/_test\.exs$/, ~r/test\//, ~r/mix\.exs$/,
       ~r/endpoint\.ex$/, ~r/telemetry\.ex$/, ~r/gettext\.ex$/,
       ~r/router\.ex$/, ~r/_web\.ex$/, ~r/_controller\.ex$/, ~r/_html\.ex$/,
-      ~r/_json\.ex$/, ~r/_components\.ex$/
+      ~r/_json\.ex$/, ~r/_components\.ex$/, ~r/migrations\//
     ]],
     explanations: [
       check: """

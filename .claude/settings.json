@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "explicit hooks claude check-fixme",
+            "type": "command"
+          }
+        ],
+        "matcher": "^(Edit|Write)$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "make debug 2>&1 && devenv shell -- bash -c 'cd server && mix test 2>&1 && INCLUDE_ERTS=false mix release --overwrite 2>&1' | tail -5",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

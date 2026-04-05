@@ -35,7 +35,7 @@ defmodule Explicit.TestRunner do
 
   defp run_mix_test(dir, timeout) do
     task = Task.async(fn ->
-      System.cmd("mix", ["test", "--formatter", "ExUnit.CLIFormatter", "--no-color"],
+      System.cmd("mix", ["test", "--cover", "--formatter", "ExUnit.CLIFormatter", "--no-color"],
         cd: dir,
         stderr_to_stdout: true,
         env: [{"MIX_ENV", "test"}]
@@ -65,13 +65,22 @@ defmodule Explicit.TestRunner do
           {0, 0, 0}
       end
 
+    coverage = case Regex.run(~r/([\d.]+)%\s*\|\s*Total/, output) do
+      [_, pct] -> String.to_float(pct)
+      _ -> nil
+    end
+
+    below_threshold = String.contains?(output, "Coverage below threshold")
+
     %{
       exit_code: exit_code,
       passed: exit_code == 0,
       tests: tests,
       failures: failures,
       excluded: excluded,
-      output: truncate(output, 4000)
+      coverage: coverage,
+      coverage_below_threshold: below_threshold,
+      output: truncate(output, 8000)
     }
   end
 

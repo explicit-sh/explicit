@@ -32,12 +32,15 @@ pub fn main() !void {
 
     // Collect remaining positional args + flags
     var json_output = false;
+    var no_sandbox = false;
     var positional: [8]?[]const u8 = .{null} ** 8;
     var pos_count: usize = 0;
 
     while (args.next()) |arg| {
         if (mem.eql(u8, arg, "--json")) {
             json_output = true;
+        } else if (mem.eql(u8, arg, "--no-sandbox")) {
+            no_sandbox = true;
         } else if (pos_count < 8) {
             positional[pos_count] = arg;
             pos_count += 1;
@@ -55,10 +58,10 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
-        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count]);
+        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
-        try cmdLaunchAI(allocator, "gemini", &.{"-i"}, positional[0..pos_count]);
+        try cmdLaunchAI(allocator, "gemini", &.{"-i"}, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
         // init <name>: create project dir + git init, then start server there
@@ -210,6 +213,7 @@ fn printUsage() void {
         \\
         \\Flags:
         \\  --json                     Output raw JSON
+        \\  --no-sandbox               Skip nono sandbox (claude/gemini)
         \\
     ) catch {};
 }
@@ -258,7 +262,10 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
     };
 
     if (mem.eql(u8, h, "stop")) {
-        try hookClaudeStop(allocator);
+        hookClaudeStop(allocator) catch |err| {
+            stderr().print("[FAIL] Stop hook crashed: {s}\n", .{@errorName(err)}) catch {};
+            process.exit(2);
+        };
     } else if (mem.eql(u8, h, "check-fixme")) {
         try hookSendQuiet(allocator, "{\"method\":\"doc.check_fixme\"}\n");
     } else if (mem.eql(u8, h, "check-code")) {
@@ -272,8 +279,21 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
 
 /// Stop hook: quality gate + auto-format + compile warnings
 fn hookClaudeStop(allocator: mem.Allocator) !void {
-    const git_root = findGitRoot(allocator) catch { process.exit(0); };
+    const git_root = findGitRoot(allocator) catch {
+        stderr().writeAll("No git root found, skipping checks.\n") catch {};
+        process.exit(0);
+    };
     defer allocator.free(git_root);
+
+    // Ensure server is running (auto-starts if needed)
+    {
+        var stream = connectToSocket(allocator) catch {
+            stderr().writeAll("Could not start explicit server, skipping checks.\n") catch {};
+            process.exit(0);
+        };
+        stream.close();
+    }
+
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
@@ -299,20 +319,13 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     }
 
     // Compile with warnings-as-errors — report any warnings to Claude
-    {
+    compile_blk: {
         var compile = std.process.Child.init(&.{ "mix", "compile", "--warnings-as-errors" }, allocator);
         compile.cwd = mix_dir;
         compile.stdout_behavior = .Pipe;
         compile.stderr_behavior = .Pipe;
-        if (compile.spawn()) |_| {} else |_| {
-            // mix not found, skip
-            if (has_issues) process.exit(2);
-            process.exit(0);
-        }
-        const term = compile.wait() catch {
-            if (has_issues) process.exit(2);
-            process.exit(0);
-        };
+        _ = compile.spawn() catch break :compile_blk;
+        const term = compile.wait() catch break :compile_blk;
         if (term.Exited != 0) {
             // Read stderr for warning messages
             if (compile.stderr) |pipe| {
@@ -354,6 +367,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     }
 
     if (has_issues) process.exit(2);
+    stderr().writeAll("All checks passed.\n") catch {};
     process.exit(0);
 }
 
@@ -363,8 +377,14 @@ fn checkQuality(sock_path: []const u8) !bool {
     defer stream.close();
     stream.writeAll("{\"method\":\"quality\"}\n") catch { return false; };
     var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch { return false; };
-    if (n == 0) return false;
+    const n = stream.read(&buf) catch {
+        stderr().writeAll("Quality check: server not responding.\n") catch {};
+        return true;
+    };
+    if (n == 0) {
+        stderr().writeAll("Quality check: empty response from server.\n") catch {};
+        return true;
+    }
     const response = buf[0..n];
     if (mem.indexOf(u8, response, "\"clean\":true") != null) return false;
 
@@ -374,18 +394,16 @@ fn checkQuality(sock_path: []const u8) !bool {
     // Count non-zero categories
     const iron = extractJsonInt(response, "\"iron_law_violations\":") orelse 0;
     const docs = extractJsonInt(response, "\"missing_docs\":") orelse 0;
-    const tests = extractJsonInt(response, "\"missing_tests\":") orelse 0;
     const doc_errs = extractJsonInt(response, "\"doc_errors\":") orelse 0;
 
     err.writeAll("Quality issues: ") catch {};
     var sep: bool = false;
     if (iron > 0) { err.print("{d} code violations", .{iron}) catch {}; sep = true; }
     if (docs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing @doc", .{docs}) catch {}; sep = true; }
-    if (tests > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing tests (lib/foo.ex needs test/foo_test.exs)", .{tests}) catch {}; sep = true; }
     if (doc_errs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} doc errors", .{doc_errs}) catch {}; }
     err.writeAll("\nRun `explicit violations` for full list.\n") catch {};
 
-    // Show top 3 files
+    // Show top 3 files with violations
     var file_it = mem.splitSequence(u8, response, "\"file\":\"");
     _ = file_it.next();
     var count: u32 = 0;
@@ -402,17 +420,51 @@ fn checkQuality(sock_path: []const u8) !bool {
 }
 
 /// Send method, check if response contains the "clean" marker. Returns true if issues found.
+/// Output goes to stderr (for stop hook visibility).
 fn checkMethod(sock_path: []const u8, request: []const u8, clean_marker: []const u8) !bool {
-    var stream = net.connectUnixSocket(sock_path) catch { return false; };
+    var stream = net.connectUnixSocket(sock_path) catch {
+        stderr().writeAll("Test check: could not connect to server.\n") catch {};
+        return true;
+    };
     defer stream.close();
-    stream.writeAll(request) catch { return false; };
+    stream.writeAll(request) catch {
+        stderr().writeAll("Test check: failed to send request.\n") catch {};
+        return true;
+    };
     var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch { return false; };
-    if (n == 0) return false;
+    const n = stream.read(&buf) catch {
+        stderr().writeAll("Test check: server not responding.\n") catch {};
+        return true;
+    };
+    if (n == 0) {
+        stderr().writeAll("Test check: empty response from server.\n") catch {};
+        return true;
+    }
     const response = buf[0..n];
     if (mem.indexOf(u8, response, clean_marker) != null) return false;
-    // Format as human-readable instead of dumping raw JSON
-    printHuman(response) catch {};
+    // Output test results to stderr so stop hook sees them
+    const err = stderr();
+    if (mem.indexOf(u8, response, "\"passed\":false") != null or mem.indexOf(u8, response, "\"passed\":true") == null) {
+        err.writeAll("Tests: FAILED\n") catch {};
+    }
+    if (extractJsonInt(response, "\"tests\":")) |t| err.print("  Total: {d}\n", .{t}) catch {};
+    if (extractJsonInt(response, "\"failures\":")) |f| {
+        if (f > 0) err.print("  Failures: {d}\n", .{f}) catch {};
+    }
+    if (mem.indexOf(u8, response, "\"coverage\":")) |pos| {
+        const start = pos + "\"coverage\":".len;
+        var end: usize = start;
+        while (end < response.len and response[end] != ',' and response[end] != '}') : (end += 1) {}
+        if (end > start) {
+            const cov_str = mem.trim(u8, response[start..end], " ");
+            if (!mem.eql(u8, cov_str, "null")) {
+                err.print("  Coverage: {s}%\n", .{cov_str}) catch {};
+            }
+        }
+    }
+    if (mem.indexOf(u8, response, "\"coverage_below_threshold\":true") != null) {
+        err.writeAll("  Coverage below threshold!\n") catch {};
+    }
     return true;
 }
 
@@ -534,7 +586,7 @@ fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) vo
 
 // ─── AI launcher ─────────────────────────────────────────────────────────────
 
-fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8, extra_args: []const ?[]const u8) !void {
+fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8, extra_args: []const ?[]const u8, no_sandbox: bool) !void {
     // 1. Connect to server (auto-starts if needed)
     var stream = try connectToSocket(allocator);
 
@@ -582,6 +634,52 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
 
     if (devenv_dir) |d| {
         if (!in_devenv) {
+            // Verify devenv shell works; if stale lock, auto-update
+            {
+                var probe = std.process.Child.init(&.{ "devenv", "shell", "--", "true" }, allocator);
+                probe.cwd = d;
+                probe.stdout_behavior = .Ignore;
+                probe.stderr_behavior = .Ignore;
+                if (probe.spawn()) |_| {
+                    const pt = probe.wait() catch null;
+                    if (pt == null or pt.?.Exited != 0) {
+                        stderr().writeAll("devenv shell failed, clearing cache + updating...\n") catch {};
+                        const cache_path = std.fmt.allocPrint(allocator, "{s}/.devenv/nix-eval-cache.db", .{d}) catch null;
+                        if (cache_path) |cp| {
+                            fs.deleteFileAbsolute(cp) catch {};
+                            allocator.free(cp);
+                        }
+                        var upd = std.process.Child.init(&.{ "devenv", "update" }, allocator);
+                        upd.cwd = d;
+                        upd.stdout_behavior = .Inherit;
+                        upd.stderr_behavior = .Inherit;
+                        _ = upd.spawn() catch {};
+                        _ = upd.wait() catch {};
+                    }
+                } else |_| {}
+            }
+
+            // Start devenv services BEFORE entering shell (avoids cache conflicts)
+            {
+                stderr().writeAll("Starting devenv services...\n") catch {};
+                var up = std.process.Child.init(&.{ "devenv", "up", "--detach" }, allocator);
+                up.cwd = d;
+                up.stdout_behavior = .Ignore;
+                up.stderr_behavior = .Pipe;
+                if (up.spawn()) |_| {
+                    const up_term = up.wait() catch null;
+                    if (up_term) |t| {
+                        if (t.Exited != 0) {
+                            if (up.stderr) |pipe| {
+                                var ubuf: [2048]u8 = undefined;
+                                const un = pipe.read(&ubuf) catch 0;
+                                if (un > 0) stderr().writeAll(ubuf[0..un]) catch {};
+                            }
+                        }
+                    }
+                } else |_| {}
+            }
+
             // Re-exec ourselves inside devenv shell (interactive, with watcher)
             stderr().print("Entering devenv shell from {s}...\n", .{d}) catch {};
 
@@ -600,6 +698,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
             reexec_buf[rc] = "--"; rc += 1;
             reexec_buf[rc] = self_path; rc += 1;
             reexec_buf[rc] = tool_name; rc += 1;
+            if (no_sandbox) { reexec_buf[rc] = "--no-sandbox"; rc += 1; }
             // Pass through extra args
             for (extra_args) |ea| {
                 if (ea) |a| {
@@ -637,8 +736,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         }
     }
 
-    // Check if nono is available
-    const has_nono = blk: {
+    // Check if nono is available (skip if --no-sandbox)
+    const has_nono = if (no_sandbox) false else blk: {
         var check = std.process.Child.init(&.{ "nono", "--version" }, allocator);
         check.stdout_behavior = .Ignore;
         check.stderr_behavior = .Ignore;
@@ -647,7 +746,9 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         break :blk t.Exited == 0;
     };
 
-    if (has_nono) {
+    if (no_sandbox) {
+        stderr().print("Starting {s} (sandbox disabled)...\n", .{tool_name}) catch {};
+    } else if (has_nono) {
         stderr().print("Starting {s} with nono sandbox...\n", .{tool_name}) catch {};
     } else {
         stderr().print("Starting {s}...\n", .{tool_name}) catch {};
@@ -938,7 +1039,7 @@ fn printHuman(response: []const u8) !void {
             .{ "\"iron_law_violations\":", "iron_law" },
             .{ "\"missing_specs\":", "missing_specs" },
             .{ "\"missing_docs\":", "missing_docs" },
-            .{ "\"missing_tests\":", "missing_tests" },
+            .{ "\"tests_in_lib\":", "tests_in_lib" },
             .{ "\"doc_errors\":", "doc_errors" },
         }) |pair| {
             if (extractJsonInt(response, pair[0])) |n| {
@@ -1099,6 +1200,21 @@ fn printHuman(response: []const u8) !void {
         if (extractJsonInt(response, "\"tests\":")) |n| try out.print("  Total: {d}\n", .{n});
         if (extractJsonInt(response, "\"failures\":")) |n| {
             if (n > 0) try out.print("  Failures: {d}\n", .{n});
+        }
+        // Coverage info
+        if (mem.indexOf(u8, response, "\"coverage\":")) |pos| {
+            const start = pos + "\"coverage\":".len;
+            var end: usize = start;
+            while (end < response.len and response[end] != ',' and response[end] != '}') : (end += 1) {}
+            if (end > start) {
+                const cov_str = mem.trim(u8, response[start..end], " ");
+                if (!mem.eql(u8, cov_str, "null")) {
+                    try out.print("  Coverage: {s}%\n", .{cov_str});
+                }
+            }
+        }
+        if (mem.indexOf(u8, response, "\"coverage_below_threshold\":true") != null) {
+            try out.writeAll("  Coverage below threshold!\n");
         }
         return;
     }

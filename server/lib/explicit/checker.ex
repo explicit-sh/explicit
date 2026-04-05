@@ -76,10 +76,12 @@ defmodule Explicit.Checker do
     end
   end
 
-  @doc "Run project-level checks (missing test files, etc)"
+  @doc "Run project-level checks (duplicate migrations, test files in lib/, etc)"
   @spec project_checks(String.t()) :: [map()]
   def project_checks(project_dir) do
-    Explicit.Checks.NoModuleWithoutTest.check(project_dir)
+    Explicit.Checks.NoDuplicateMigrationTimestamps.check(project_dir) ++
+    Explicit.Checks.NoTestInLibDir.check(project_dir) ++
+    Explicit.Checks.NoDefaultPhoenixPage.check(project_dir)
   end
 
   @doc "Run project-level checks and store results"
