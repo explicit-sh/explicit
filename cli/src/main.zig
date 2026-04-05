@@ -375,6 +375,11 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 fn checkQuality(sock_path: []const u8) !bool {
     var stream = net.connectUnixSocket(sock_path) catch { return false; };
     defer stream.close();
+
+    // Set 30s read timeout for quality check
+    const timeout = std.posix.timeval{ .sec = 30, .usec = 0 };
+    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
+
     stream.writeAll("{\"method\":\"quality\"}\n") catch { return false; };
     var buf: [65536]u8 = undefined;
     const n = stream.read(&buf) catch {
@@ -427,13 +432,18 @@ fn checkMethod(sock_path: []const u8, request: []const u8, clean_marker: []const
         return true;
     };
     defer stream.close();
+
+    // Set 120s read timeout (mix test --cover can be slow)
+    const timeout = std.posix.timeval{ .sec = 120, .usec = 0 };
+    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
+
     stream.writeAll(request) catch {
         stderr().writeAll("Test check: failed to send request.\n") catch {};
         return true;
     };
     var buf: [65536]u8 = undefined;
     const n = stream.read(&buf) catch {
-        stderr().writeAll("Test check: server not responding.\n") catch {};
+        stderr().writeAll("Test check: timed out (120s).\n") catch {};
         return true;
     };
     if (n == 0) {
