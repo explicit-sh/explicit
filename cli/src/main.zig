@@ -305,13 +305,14 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     // Find the mix project dir (services/*/ or project root)
     const mix_dir = findMixDir(allocator, git_root) orelse git_root;
 
-    // Run mix test --cover directly (server's System.cmd can't find mix in OTP release)
+    // Run mix test directly (server's System.cmd can't find mix in OTP release)
     test_blk: {
-        stderr().writeAll("Running mix test --cover...\n") catch {};
-        var test_proc = std.process.Child.init(&.{ "mix", "test", "--cover" }, allocator);
+        stderr().writeAll("Running mix test...\n") catch {};
+        var test_proc = std.process.Child.init(&.{ "mix", "test" }, allocator);
         test_proc.cwd = mix_dir;
-        test_proc.stdout_behavior = .Pipe;
-        test_proc.stderr_behavior = .Pipe;
+        // Inherit stdout/stderr so output goes to terminal and pipe doesn't deadlock
+        test_proc.stdout_behavior = .Inherit;
+        test_proc.stderr_behavior = .Inherit;
         var test_env = try std.process.getEnvMap(allocator);
         defer test_env.deinit();
         try test_env.put("MIX_ENV", "test");
@@ -319,30 +320,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         _ = test_proc.spawn() catch break :test_blk;
         const test_term = test_proc.wait() catch break :test_blk;
         if (test_term.Exited != 0) {
-            // Read stdout for test output (mix test writes results to stdout)
-            if (test_proc.stdout) |pipe| {
-                var tbuf: [8192]u8 = undefined;
-                const tn = pipe.read(&tbuf) catch 0;
-                if (tn > 0) {
-                    stderr().writeAll("Tests: FAILED\n") catch {};
-                    // Extract useful lines from output
-                    const output = tbuf[0..tn];
-                    // Find test summary line (e.g. "42 tests, 3 failures")
-                    if (mem.indexOf(u8, output, " tests,") orelse mem.indexOf(u8, output, " test,")) |pos| {
-                        // Find start of line
-                        var ls: usize = pos;
-                        while (ls > 0 and output[ls - 1] != '\n') : (ls -= 1) {}
-                        // Find end of line
-                        var le: usize = pos;
-                        while (le < output.len and output[le] != '\n') : (le += 1) {}
-                        stderr().writeAll("  ") catch {};
-                        stderr().writeAll(output[ls..le]) catch {};
-                        stderr().writeAll("\n") catch {};
-                    }
-                } else {
-                    stderr().writeAll("Tests: FAILED (no output)\n") catch {};
-                }
-            }
+            stderr().writeAll("Tests: FAILED\n") catch {};
             has_issues = true;
         }
     }
