@@ -22,6 +22,7 @@ defmodule Explicit.Doc.Discovery do
         []
       end
     end)
+    |> Enum.reject(&(String.contains?(&1, "/_build/") or String.contains?(&1, "/deps/")))
     |> Enum.uniq()
   end
 
@@ -31,8 +32,10 @@ defmodule Explicit.Doc.Discovery do
   end
 
   defp doc_path?(path) do
-    String.contains?(path, "/docs/") or
+    not String.contains?(path, "/_build/") and
+    not String.contains?(path, "/deps/") and
+    (String.contains?(path, "/docs/") or
       String.ends_with?(path, "/README.md") or
-      String.contains?(path, "/AGENTS.md")
+      String.contains?(path, "/AGENTS.md"))
   end
 end

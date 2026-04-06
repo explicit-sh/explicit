@@ -99,7 +99,7 @@ defmodule Explicit.Schema do
       name: get_positional(node, 0),
       description: get_prop(node, "description"),
       folder: get_prop(node, "folder"),
-      match: get_prop(node, "match"),
+      match: get_prop(node, "match") || get_child_value(children, "match"),
       singleton: get_prop(node, "singleton") == true,
       max_count: get_prop(node, "max_count"),
       aliases: parse_aliases(children),
@@ -240,6 +240,13 @@ defmodule Explicit.Schema do
   end
 
   # Extract a named property from node attributes
+  defp get_child_value(children, name) do
+    case Enum.find(children, fn c -> c.name == name end) do
+      nil -> nil
+      child -> get_positional(child, 0)
+    end
+  end
+
   defp get_prop(node, key) do
     node.attributes
     |> Enum.find(fn

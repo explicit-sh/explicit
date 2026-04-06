@@ -173,6 +173,9 @@ defmodule Explicit.ConnectionHandler do
     # Run project-level checks (duplicate migrations, test files in lib/)
     project_violations = Checker.project_checks(project_dir)
 
+    # Refresh doc cache before reading summary (validate always runs fresh)
+    refresh_doc_cache(project_dir)
+
     # Aggregate all results
     code_summary = ViolationStore.summary()
     doc_summary = DocStore.summary()
@@ -663,6 +666,24 @@ defmodule Explicit.ConnectionHandler do
     instructions = if doc_errors > 0, do: ["Fix #{doc_errors} doc validation error(s): run `explicit docs validate`" | instructions], else: instructions
 
     Enum.reverse(instructions)
+  end
+
+  defp refresh_doc_cache(project_dir) do
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
+    doc_files = Discovery.discover(project_dir, schema)
+    Enum.each(doc_files, fn file ->
+      case Document.parse_file(file) do
+        {:ok, doc} ->
+          {:ok, diags} = Validation.validate(doc, schema)
+          code_paths_diags = if Map.has_key?(doc.frontmatter, "code_paths") do
+            [{:error, "F010", "Field 'code_paths' is not allowed in frontmatter. Links go from code to docs, not the other way. Remove code_paths and reference doc IDs in your Elixir code instead (e.g. @moduledoc \"Implements #{doc.id}\")."}]
+          else
+            []
+          end
+          DocStore.put(file, diags ++ code_paths_diags)
+        {:error, _} -> :ok
+      end
+    end)
   end
 
   defp scan_doc_refs(code_files) do

@@ -17,7 +17,8 @@ defmodule Explicit.Doc.Validation do
         validate_frontmatter(doc, type_def) ++
         validate_sections(doc, type_def) ++
         validate_rules(doc, type_def) ++
-        validate_refs(doc, schema)
+        validate_refs(doc, schema) ++
+        validate_title_slug(doc)
 
       {:ok, diagnostics}
     else
@@ -204,6 +205,33 @@ defmodule Explicit.Doc.Validation do
       []
     else
       [{:warning, "R001", "Reference '#{ref}' in field '#{field}' doesn't match expected format"}]
+    end
+  end
+
+  # ─── Title / filename slug check ──────────────────────────────────────────
+
+  # Skip check if no path or no title
+  defp validate_title_slug(%Document{path: nil}), do: []
+  defp validate_title_slug(%Document{title: nil}), do: []
+  defp validate_title_slug(%Document{title: ""}), do: []
+
+  defp validate_title_slug(%Document{path: path, title: title}) do
+    basename = Path.basename(path, ".md")
+    # Extract slug: everything after the "{type}-{nnn}-" prefix
+    case Regex.run(~r/^[a-z]+-\d+-(.+)$/, basename) do
+      [_, slug] ->
+        normalized_slug = String.replace(slug, "-", " ")
+        normalized_title = title |> String.downcase() |> String.replace(~r/[^a-z0-9 ]/, "")
+        dist = String.jaro_distance(normalized_slug, normalized_title)
+        if dist < 0.7 do
+          [{:warning, "T001",
+            "Filename slug '#{slug}' doesn't match title '#{title}' (similarity: #{Float.round(dist, 2)}). Rename file or update title."}]
+        else
+          []
+        end
+      _ ->
+        # No slug in filename (e.g. "adr-001.md") — nothing to check
+        []
     end
   end
 

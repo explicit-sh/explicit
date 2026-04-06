@@ -58,6 +58,22 @@ pub fn main() !void {
         try cmdHooks(allocator, p0, p1);
         return;
     } else if (mem.eql(u8, command, "claude")) {
+        if (p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
+            stderr().writeAll(
+                \\explicit claude — Launch Claude Code with explicit context
+                \\
+                \\Usage: explicit claude [flags] [-- claude-args...]
+                \\
+                \\Flags:
+                \\  --no-sandbox    Skip nono sandbox for this session
+                \\  -c              Continue last conversation
+                \\  -p "prompt"     Start with a prompt
+                \\
+                \\Extra flags after explicit's own are passed to claude directly.
+                \\
+            ) catch {};
+            return;
+        }
         try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
@@ -144,6 +160,22 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
 }
 
 fn buildDocsRequest(allocator: mem.Allocator, p0: ?[]const u8, p1: ?[]const u8) ![]const u8 {
+    if (p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
+        stderr().writeAll(
+            \\Usage: explicit docs <command>
+            \\
+            \\Commands:
+            \\  validate       Validate all docs against schema
+            \\  lint           Validate + graph health + fixme check
+            \\  new <type>     Create new document (run with --help for details)
+            \\  list [type]    List documents
+            \\  get <id>       Show document details
+            \\  describe       Show schema types
+            \\  diagnostics    Show all diagnostics
+            \\
+        ) catch {};
+        process.exit(0);
+    }
     const subcmd = p0 orelse {
         stderr().writeAll("Usage: explicit docs <validate|new|list|get|describe|lint|diagnostics>\n") catch {};
         process.exit(1);
@@ -173,8 +205,23 @@ fn buildDocsRequest(allocator: mem.Allocator, p0: ?[]const u8, p1: ?[]const u8) 
         return try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.get\",\"params\":{{\"id\":\"{s}\"}}}}\n", .{id});
     }
     if (mem.eql(u8, subcmd, "new")) {
+        if (p1 != null and (mem.eql(u8, p1.?, "--help") or mem.eql(u8, p1.?, "-h"))) {
+            stderr().writeAll(
+                \\Usage: explicit docs new <type> [title]
+                \\
+                \\Create a new document of the given type.
+                \\Type must match a typedef in your schema.kdl.
+                \\
+                \\Examples:
+                \\  explicit docs new adr "Use PostgreSQL for storage"
+                \\  explicit docs new opportunity "Improve crawler throughput"
+                \\  explicit docs new incident "API outage 2026-04-06"
+                \\
+            ) catch {};
+            process.exit(0);
+        }
         const type_name = p1 orelse {
-            stderr().writeAll("Usage: explicit docs new <type> <title>\n") catch {};
+            stderr().writeAll("Usage: explicit docs new <type> [title]\n") catch {};
             process.exit(1);
         };
         // TODO: pass title from additional args
@@ -357,26 +404,20 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         }
     }
 
-    // Validate OpenTofu if infra/ exists
+    // Validate OpenTofu if infra/ is initialized (skip if tofu init hasn't been run)
     {
         const infra_dir = try std.fmt.allocPrint(allocator, "{s}/infra", .{git_root});
         defer allocator.free(infra_dir);
-        if (fs.accessAbsolute(infra_dir, .{})) {
+        const tf_dir = try std.fmt.allocPrint(allocator, "{s}/infra/.terraform", .{git_root});
+        defer allocator.free(tf_dir);
+        if (fs.accessAbsolute(tf_dir, .{})) {
             var validate = std.process.Child.init(&.{ "tofu", "validate" }, allocator);
             validate.cwd = infra_dir;
-            validate.stdout_behavior = .Pipe;
-            validate.stderr_behavior = .Pipe;
-            if (validate.spawn()) |_| {} else |_| {}
+            validate.stdout_behavior = .Inherit;
+            validate.stderr_behavior = .Inherit;
+            _ = validate.spawn() catch {};
             if (validate.wait()) |term| {
                 if (term.Exited != 0) {
-                    if (validate.stderr) |pipe| {
-                        var buf: [4096]u8 = undefined;
-                        const n = pipe.read(&buf) catch 0;
-                        if (n > 0) {
-                            stderr().writeAll("Terraform validation errors:\n") catch {};
-                            stderr().writeAll(buf[0..n]) catch {};
-                        }
-                    }
                     has_issues = true;
                 }
             } else |_| {}
@@ -693,10 +734,13 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
                 up.cwd = d;
                 up.stdout_behavior = .Ignore;
                 up.stderr_behavior = .Pipe;
+                var up_ok = false;
                 if (up.spawn()) |_| {
                     const up_term = up.wait() catch null;
                     if (up_term) |t| {
-                        if (t.Exited != 0) {
+                        if (t.Exited == 0) {
+                            up_ok = true;
+                        } else {
                             if (up.stderr) |pipe| {
                                 var ubuf: [2048]u8 = undefined;
                                 const un = pipe.read(&ubuf) catch 0;
@@ -705,6 +749,17 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
                         }
                     }
                 } else |_| {}
+
+                // Wait for services to be healthy (postgres etc.)
+                if (up_ok) {
+                    stderr().writeAll("Waiting for devenv services to be ready...\n") catch {};
+                    var wait_proc = std.process.Child.init(&.{ "devenv", "processes", "wait", "--timeout", "60" }, allocator);
+                    wait_proc.cwd = d;
+                    wait_proc.stdout_behavior = .Ignore;
+                    wait_proc.stderr_behavior = .Inherit;
+                    _ = wait_proc.spawn() catch {};
+                    _ = wait_proc.wait() catch {};
+                }
             }
 
             // Re-exec ourselves inside devenv shell (interactive, with watcher)
@@ -837,9 +892,115 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     defer env.deinit();
     child.env_map = &env;
 
+    // Ensure RTK Bash hook is configured (if rtk is installed)
+    if (findGitRoot(allocator)) |git_root| {
+        defer allocator.free(git_root);
+        ensureRtkHook(allocator, git_root) catch {};
+    } else |_| {}
+
     _ = try child.spawn();
     const term = try child.wait();
     process.exit(term.Exited);
+}
+
+/// Inject RTK Bash hook into .claude/settings.json if rtk is installed.
+/// Idempotent — checks for "rtk-rewrite" before modifying.
+fn ensureRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
+    // 1. Check if rtk binary is in PATH
+    if (!binaryInPath(allocator, "rtk")) return;
+
+    // 2. Ensure ~/.claude/hooks/rtk-rewrite.sh exists
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch return;
+    defer allocator.free(home);
+
+    const hook_path = try std.fmt.allocPrint(allocator, "{s}/.claude/hooks/rtk-rewrite.sh", .{home});
+    defer allocator.free(hook_path);
+
+    if (fs.accessAbsolute(hook_path, .{})) |_| {
+        // Already exists — nothing to do
+    } else |_| {
+        // Run rtk init -g to create the hook script
+        var rtk_init = std.process.Child.init(&.{ "rtk", "init", "-g" }, allocator);
+        rtk_init.stdout_behavior = .Ignore;
+        rtk_init.stderr_behavior = .Ignore;
+        _ = rtk_init.spawn() catch return;
+        _ = rtk_init.wait() catch {};
+        // Verify the script was created
+        fs.accessAbsolute(hook_path, .{}) catch return;
+    }
+
+    // 3. Read project's .claude/settings.json
+    const settings_path = try std.fmt.allocPrint(allocator, "{s}/.claude/settings.json", .{git_root});
+    defer allocator.free(settings_path);
+
+    const f = fs.openFileAbsolute(settings_path, .{}) catch return;
+    const content = f.readToEndAlloc(allocator, 65536) catch { f.close(); return; };
+    f.close();
+    defer allocator.free(content);
+
+    // 4. Idempotency check
+    if (mem.indexOf(u8, content, "rtk-rewrite") != null) return;
+
+    // 5. Inject the hook
+    const rtk_hook =
+        \\{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/rtk-rewrite.sh"}]}
+    ;
+    const new_content = try injectPreToolUseHook(allocator, content, rtk_hook);
+    defer allocator.free(new_content);
+
+    if (mem.eql(u8, new_content, content)) return; // no change
+
+    const out = try fs.createFileAbsolute(settings_path, .{});
+    defer out.close();
+    try out.writeAll(new_content);
+
+    stderr().writeAll("RTK: Added Bash hook to .claude/settings.json\n") catch {};
+}
+
+/// Return true if binary name exists in PATH.
+fn binaryInPath(allocator: mem.Allocator, name: []const u8) bool {
+    const path_env = std.process.getEnvVarOwned(allocator, "PATH") catch return false;
+    defer allocator.free(path_env);
+    var it = mem.splitScalar(u8, path_env, ':');
+    while (it.next()) |dir| {
+        const p = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch continue;
+        defer allocator.free(p);
+        if (fs.accessAbsolute(p, .{})) |_| return true else |_| {}
+    }
+    return false;
+}
+
+/// Insert hook_entry into the PreToolUse array in JSON content.
+/// If PreToolUse doesn't exist, creates it. Returns new JSON string.
+fn injectPreToolUseHook(allocator: mem.Allocator, content: []const u8, hook_entry: []const u8) ![]const u8 {
+    // Case 1: "PreToolUse" already exists — insert at start of its array
+    if (mem.indexOf(u8, content, "\"PreToolUse\"")) |pre_pos| {
+        var scan = pre_pos + "\"PreToolUse\"".len;
+        while (scan < content.len and content[scan] != '[') : (scan += 1) {}
+        if (scan < content.len) {
+            const insert_pos = scan + 1;
+            return try std.fmt.allocPrint(allocator, "{s}{s},{s}", .{
+                content[0..insert_pos], hook_entry, content[insert_pos..],
+            });
+        }
+    }
+
+    // Case 2: No PreToolUse — add it after "hooks": {
+    if (mem.indexOf(u8, content, "\"hooks\"")) |hooks_pos| {
+        var scan = hooks_pos + "\"hooks\"".len;
+        while (scan < content.len and content[scan] != '{') : (scan += 1) {}
+        if (scan < content.len) {
+            const insert_pos = scan + 1;
+            const entry = try std.fmt.allocPrint(allocator, "\"PreToolUse\":[{s}],", .{hook_entry});
+            defer allocator.free(entry);
+            return try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+                content[0..insert_pos], entry, content[insert_pos..],
+            });
+        }
+    }
+
+    // Fallback: return unchanged
+    return try allocator.dupe(u8, content);
 }
 
 /// Find the mix project directory. Checks services/*/ first, then project root.
