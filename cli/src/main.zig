@@ -86,6 +86,9 @@ pub fn main() !void {
     } else if (mem.eql(u8, command, "help") or mem.eql(u8, command, "--help") or mem.eql(u8, command, "-h")) {
         printUsage();
         return;
+    } else if (mem.eql(u8, command, "version") or mem.eql(u8, command, "--version") or mem.eql(u8, command, "-v")) {
+        stdout().writeAll("0.3.9\n") catch {};
+        return;
     }
 
     // ─── Commands that send to the server ──────────────────────────────
