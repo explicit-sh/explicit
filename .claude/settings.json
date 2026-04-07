@@ -1,4 +1,17 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(mix:*)",
+      "Bash(zig:*)",
+      "Bash(explicit:*)",
+      "Bash(gemini:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git show:*)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -15,7 +28,7 @@
       {
         "hooks": [
           {
-            "command": "make debug 2>&1 && devenv shell -- bash -c 'cd server && mix test 2>&1 && INCLUDE_ERTS=false mix release --overwrite 2>&1' | tail -5",
+            "command": "make debug && devenv shell -- bash -c 'cd server && mix test && INCLUDE_ERTS=false mix release --overwrite'",
             "type": "command"
           }
         ]

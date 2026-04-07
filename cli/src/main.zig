@@ -49,6 +49,7 @@ pub fn main() !void {
 
     const p0 = positional[0];
     const p1 = positional[1];
+    const p2 = positional[2];
 
     // ─── Commands that don't need a running server ─────────────────────
     if (mem.eql(u8, command, "watch")) {
@@ -77,7 +78,7 @@ pub fn main() !void {
         try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
-        try cmdLaunchAI(allocator, "gemini", &.{"-i"}, positional[0..pos_count], no_sandbox);
+        try cmdLaunchAI(allocator, "gemini", &.{"--yolo", "-i"}, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
         // init <name>: create project dir + git init, then start server there
@@ -92,7 +93,7 @@ pub fn main() !void {
     }
 
     // ─── Commands that send to the server ──────────────────────────────
-    const request = try buildRequest(allocator, command, p0, p1);
+    const request = try buildRequest(allocator, command, p0, p1, p2);
     defer if (request) |r| allocator.free(r);
 
     if (request) |req| {
@@ -105,7 +106,7 @@ pub fn main() !void {
 }
 
 /// Build a JSONL request string for the given command + args
-fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, p1: ?[]const u8) !?[]const u8 {
+fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, p1: ?[]const u8, p2: ?[]const u8) !?[]const u8 {
     // Simple commands (no params)
     if (mem.eql(u8, command, "validate"))
         return try allocator.dupe(u8, "{\"method\":\"validate\"}\n");
@@ -156,13 +157,13 @@ fn buildRequest(allocator: mem.Allocator, command: []const u8, p0: ?[]const u8, 
 
     // docs <subcmd> [arg]
     if (mem.eql(u8, command, "docs")) {
-        return try buildDocsRequest(allocator, p0, p1);
+        return try buildDocsRequest(allocator, p0, p1, p2);
     }
 
     return null;
 }
 
-fn buildDocsRequest(allocator: mem.Allocator, p0: ?[]const u8, p1: ?[]const u8) ![]const u8 {
+fn buildDocsRequest(allocator: mem.Allocator, p0: ?[]const u8, p1: ?[]const u8, p2: ?[]const u8) ![]const u8 {
     if (p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
         stderr().writeAll(
             \\Usage: explicit docs <command>
@@ -227,8 +228,13 @@ fn buildDocsRequest(allocator: mem.Allocator, p0: ?[]const u8, p1: ?[]const u8) 
             stderr().writeAll("Usage: explicit docs new <type> [title]\n") catch {};
             process.exit(1);
         };
-        // TODO: pass title from additional args
-        return try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.new\",\"params\":{{\"type\":\"{s}\",\"title\":\"Untitled\"}}}}\n", .{type_name});
+        const title_raw = p2 orelse "Untitled";
+        // JSON-escape title: replace \ then " to avoid breaking the JSON string
+        const title_bs = try std.mem.replaceOwned(u8, allocator, title_raw, "\\", "\\\\");
+        defer allocator.free(title_bs);
+        const title_escaped = try std.mem.replaceOwned(u8, allocator, title_bs, "\"", "\\\"");
+        defer allocator.free(title_escaped);
+        return try std.fmt.allocPrint(allocator, "{{\"method\":\"doc.new\",\"params\":{{\"type\":\"{s}\",\"title\":\"{s}\"}}}}\n", .{ type_name, title_escaped });
     }
 
     stderr().print("Unknown docs command: {s}\n", .{subcmd}) catch {};
@@ -692,7 +698,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         defer f.close();
         try f.writeAll(unescaped);
     }
-    const prompt_arg: []const u8 = prompt_path;
+    // Gemini's -i flag takes the prompt text directly; Claude uses --append-system-prompt-file
+    const prompt_arg: []const u8 = if (mem.eql(u8, tool_name, "gemini")) unescaped else prompt_path;
 
     // If devenv.nix exists but we're not inside devenv shell, re-exec through devenv
     const devenv_dir = findDevenvDir(allocator);
