@@ -25,7 +25,12 @@ defmodule Explicit.SocketServer do
 
     case :gen_tcp.listen(0, [
            :binary,
-           packet: :line,
+           # 4-byte big-endian length prefix framing. Erlang handles the framing
+           # on both recv (strips the header, returns payload) and send
+           # (prepends the header automatically). No size limit beyond 4 GB.
+           # See EXPLICIT-FEEDBACK.md #10 — replaces packet: :line which had
+           # an 8192-byte silent truncation bug.
+           packet: 4,
            ip: {:local, path},
            active: false,
            reuseaddr: true

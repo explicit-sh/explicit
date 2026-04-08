@@ -284,6 +284,48 @@ fn ensureSelfInPath(_: mem.Allocator) void {
     self_dir = std.fs.path.dirname(exe_path);
 }
 
+// ─── Socket framing (packet: 4 — 4-byte big-endian length prefix) ──────────
+// Matches the server's :gen_tcp.listen with `packet: 4`. Fixes the 8192-byte
+// truncation bug documented in EXPLICIT-FEEDBACK.md #10.
+
+const max_frame_size: u32 = 16 * 1024 * 1024; // 16 MB sanity cap
+
+/// Read exactly buf.len bytes from the stream. Returns error on EOF.
+fn readExact(stream: net.Stream, buf: []u8) !void {
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = try stream.read(buf[total..]);
+        if (n == 0) return error.EndOfStream;
+        total += n;
+    }
+}
+
+/// Send a length-prefixed frame: 4-byte BE length + payload.
+fn sendFrame(stream: net.Stream, payload: []const u8) !void {
+    var hdr: [4]u8 = undefined;
+    std.mem.writeInt(u32, &hdr, @intCast(payload.len), .big);
+    try stream.writeAll(&hdr);
+    try stream.writeAll(payload);
+}
+
+/// Receive a length-prefixed frame. Caller owns the returned slice.
+fn recvFrame(allocator: mem.Allocator, stream: net.Stream) ![]u8 {
+    var hdr: [4]u8 = undefined;
+    try readExact(stream, &hdr);
+    const len = std.mem.readInt(u32, &hdr, .big);
+    if (len > max_frame_size) return error.FrameTooLarge;
+    const buf = try allocator.alloc(u8, len);
+    errdefer allocator.free(buf);
+    try readExact(stream, buf);
+    return buf;
+}
+
+/// Send a request frame and receive a response frame. Caller owns response.
+fn sendRequest(allocator: mem.Allocator, stream: net.Stream, request: []const u8) ![]u8 {
+    try sendFrame(stream, request);
+    return try recvFrame(allocator, stream);
+}
+
 /// Get an env map with our binary's directory prepended to PATH
 fn envWithSelfInPath(allocator: mem.Allocator) !std.process.EnvMap {
     var env = try std.process.getEnvMap(allocator);
@@ -357,7 +399,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     var has_issues = false;
 
     // Check quality (violations + doc errors + missing tests)
-    has_issues = has_issues or try checkQuality(sock_path);
+    has_issues = has_issues or try checkQuality(allocator, sock_path);
 
     // Find the mix project dir (services/*/ or project root)
     const mix_dir = findMixDir(allocator, git_root) orelse git_root;
@@ -440,7 +482,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 }
 
 /// Check quality and output concise summary to stderr. Returns true if issues found.
-fn checkQuality(sock_path: []const u8) !bool {
+fn checkQuality(allocator: mem.Allocator, sock_path: []const u8) !bool {
     var stream = net.connectUnixSocket(sock_path) catch { return false; };
     defer stream.close();
 
@@ -448,17 +490,11 @@ fn checkQuality(sock_path: []const u8) !bool {
     const timeout = std.posix.timeval{ .sec = 30, .usec = 0 };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
 
-    stream.writeAll("{\"method\":\"quality\"}\n") catch { return false; };
-    var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch {
+    const response = sendRequest(allocator, stream, "{\"method\":\"quality\"}") catch {
         stderr().writeAll("Quality check: server not responding.\n") catch {};
         return true;
     };
-    if (n == 0) {
-        stderr().writeAll("Quality check: empty response from server.\n") catch {};
-        return true;
-    }
-    const response = buf[0..n];
+    defer allocator.free(response);
     if (mem.indexOf(u8, response, "\"clean\":true") != null) return false;
 
     // Output concise summary to stderr (what Claude sees)
@@ -494,7 +530,7 @@ fn checkQuality(sock_path: []const u8) !bool {
 
 /// Send method, check if response contains the "clean" marker. Returns true if issues found.
 /// Output goes to stderr (for stop hook visibility).
-fn checkMethod(sock_path: []const u8, request: []const u8, clean_marker: []const u8) !bool {
+fn checkMethod(allocator: mem.Allocator, sock_path: []const u8, request: []const u8, clean_marker: []const u8) !bool {
     var stream = net.connectUnixSocket(sock_path) catch {
         stderr().writeAll("Test check: could not connect to server.\n") catch {};
         return true;
@@ -505,20 +541,11 @@ fn checkMethod(sock_path: []const u8, request: []const u8, clean_marker: []const
     const timeout = std.posix.timeval{ .sec = 120, .usec = 0 };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
 
-    stream.writeAll(request) catch {
-        stderr().writeAll("Test check: failed to send request.\n") catch {};
+    const response = sendRequest(allocator, stream, request) catch {
+        stderr().writeAll("Test check: server communication failed or timed out.\n") catch {};
         return true;
     };
-    var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch {
-        stderr().writeAll("Test check: timed out (120s).\n") catch {};
-        return true;
-    };
-    if (n == 0) {
-        stderr().writeAll("Test check: empty response from server.\n") catch {};
-        return true;
-    }
-    const response = buf[0..n];
+    defer allocator.free(response);
     if (mem.indexOf(u8, response, clean_marker) != null) return false;
     // Output test results to stderr so stop hook sees them
     const err = stderr();
@@ -555,15 +582,12 @@ fn hookSendQuiet(allocator: mem.Allocator, request: []const u8) !void {
 
     var stream = net.connectUnixSocket(sock_path) catch { process.exit(0); };
     defer stream.close();
-    stream.writeAll(request) catch { process.exit(0); };
 
-    var buf: [65536]u8 = undefined;
-    const n = stream.read(&buf) catch { process.exit(0); };
-    if (n > 0) {
-        const response = buf[0..n];
-        if (mem.indexOf(u8, response, "\"total\":0") == null) {
-            stderr().writeAll(response) catch {};
-        }
+    const response = sendRequest(allocator, stream, request) catch { process.exit(0); };
+    defer allocator.free(response);
+    if (mem.indexOf(u8, response, "\"total\":0") == null) {
+        stderr().writeAll(response) catch {};
+        stderr().writeAll("\n") catch {};
     }
     process.exit(0);
 }
@@ -628,17 +652,15 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
             std.Thread.sleep(200 * std.time.ns_per_ms);
             if (net.connectUnixSocket(new_sock)) |stream| {
                 // Send init command
-                stream.writeAll("{\"method\":\"init\"}\n") catch {};
-                var buf: [65536]u8 = undefined;
-                const n = stream.read(&buf) catch 0;
-                if (n > 0) {
-                    try printHuman(buf[0..n]);
-                }
+                if (sendRequest(allocator, stream, "{\"method\":\"init\"}")) |response| {
+                    defer allocator.free(response);
+                    try printHuman(response);
+                } else |_| {}
                 stream.close();
 
                 // Stop server
                 if (net.connectUnixSocket(new_sock)) |s2| {
-                    s2.writeAll("{\"method\":\"stop\"}\n") catch {};
+                    sendFrame(s2, "{\"method\":\"stop\"}") catch {};
                     s2.close();
                 } else |_| {}
 
@@ -669,21 +691,17 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     var stream = try connectToSocket(allocator);
 
     // 2. Fetch system prompt
-    const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"system_prompt\",\"params\":{{\"tool\":\"{s}\"}}}}\n", .{tool_name});
+    const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"system_prompt\",\"params\":{{\"tool\":\"{s}\"}}}}", .{tool_name});
     defer allocator.free(req);
-    try stream.writeAll(req);
 
-    var buf: [65536]u8 = undefined;
-    const n = try stream.read(&buf);
+    const response = sendRequest(allocator, stream, req) catch |err| {
+        stderr().print("Error: server communication failed: {s}\n", .{@errorName(err)}) catch {};
+        process.exit(1);
+    };
+    defer allocator.free(response);
     stream.close();
 
-    if (n == 0) {
-        stderr().writeAll("Error: Empty response from server\n") catch {};
-        process.exit(1);
-    }
-
     // 3. Extract prompt text from JSON response
-    const response = buf[0..n];
     const prompt = extractJsonString(response, "\"prompt\":\"") orelse {
         stderr().writeAll("Error: Could not extract system prompt\n") catch {};
         process.exit(1);
@@ -1170,18 +1188,16 @@ fn connectToSocket(allocator: mem.Allocator) !net.Stream {
 fn cmdSend(allocator: mem.Allocator, request: []const u8, json_output: bool) !void {
     var stream = try connectToSocket(allocator);
     defer stream.close();
-    try stream.writeAll(request);
 
-    var buf: [65536]u8 = undefined;
-    const n = try stream.read(&buf);
-    if (n == 0) {
-        try stderr().writeAll("Error: Empty response from server\n");
+    const response = sendRequest(allocator, stream, request) catch |err| {
+        stderr().print("Error: server communication failed: {s}\n", .{@errorName(err)}) catch {};
         process.exit(1);
-    }
+    };
+    defer allocator.free(response);
 
-    const response = buf[0..n];
     if (json_output) {
         try stdout().writeAll(response);
+        try stdout().writeAll("\n");
     } else {
         try printHuman(response);
     }
@@ -1490,14 +1506,12 @@ fn cmdWatch(allocator: mem.Allocator, json_output: bool) !void {
     defer stream.close();
 
     // Confirm it's running via status
-    try stream.writeAll("{\"method\":\"status\"}\n");
-    var buf: [65536]u8 = undefined;
-    const n = try stream.read(&buf);
-    if (n > 0) {
-        if (json_output) {
-            try stdout().writeAll(buf[0..n]);
-        } else {
-            try stderr().writeAll("Server is running.\n");
-        }
+    const response = try sendRequest(allocator, stream, "{\"method\":\"status\"}");
+    defer allocator.free(response);
+    if (json_output) {
+        try stdout().writeAll(response);
+        try stdout().writeAll("\n");
+    } else {
+        try stderr().writeAll("Server is running.\n");
     }
 }

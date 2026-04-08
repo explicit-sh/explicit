@@ -229,7 +229,7 @@ defmodule Explicit.ConnectionHandler do
     project_dir = Application.get_env(:explicit, :project_dir, ".")
     sarif = Explicit.Sarif.generate(project_dir)
     # Return raw SARIF JSON (not wrapped in ok/error envelope)
-    Jason.encode!(sarif) <> "\n"
+    Jason.encode!(sarif)
   end
 
   defp handle_method("test.run", params) do
