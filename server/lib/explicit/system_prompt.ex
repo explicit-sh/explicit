@@ -169,6 +169,19 @@ defmodule Explicit.SystemPrompt do
     project directory. Do NOT cd outside the project or reference absolute paths
     outside it. All files must be created within the project root.
 
+    ## NEVER read docs or config directly
+
+    Do NOT use ReadFile/ReadFolder on `docs/` or `.explicit/` directories.
+    Use the `explicit` CLI instead — it is the authoritative source:
+
+    ```
+    explicit docs list              # list all documents
+    explicit docs get <id>          # read a specific document
+    explicit docs validate          # check doc health
+    explicit docs lint              # full lint + graph check
+    explicit docs describe [type]   # show schema for a type
+    ```
+
     ## Workflow — FOLLOW THIS EXACTLY
 
     ### Phase 1: Understand (MANDATORY before any code)
