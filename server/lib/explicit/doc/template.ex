@@ -27,11 +27,29 @@ defmodule Explicit.Doc.Template do
     if File.exists?(path) do
       {:error, "File already exists: #{path}"}
     else
-      extra_fields = Keyword.get(opts, :fields, %{})
+      # Merge auto-resolved defaults (author etc.) under user-provided fields.
+      user_fields = Keyword.get(opts, :fields, %{})
+      auto_fields = auto_resolve_defaults(type_def, project_dir)
+      extra_fields = Map.merge(auto_fields, user_fields)
       content = render(type_def, id, title, extra_fields)
       File.write!(path, content)
       {:ok, path, content}
     end
+  end
+
+  # Resolve values the user shouldn't have to supply manually:
+  # - `author` (required user field) → Explicit.Org.resolve_author/1
+  # This is where EXPLICIT-FEEDBACK.md #5 gets fixed — `docs new` now
+  # prefills the author field instead of leaving it blank for validate
+  # to complain about.
+  defp auto_resolve_defaults(%TypeDef{fields: fields}, project_dir) do
+    Enum.reduce(fields, %{}, fn
+      %FieldDef{name: "author", type: "user"}, acc ->
+        Map.put(acc, "author", Explicit.Org.resolve_author(project_dir))
+
+      _, acc ->
+        acc
+    end)
   end
 
   @doc "Render document content from type definition"
@@ -84,8 +102,10 @@ defmodule Explicit.Doc.Template do
   end
 
   defp default_value(%FieldDef{default: default}) when not is_nil(default), do: default
-  defp default_value(%FieldDef{required: true, type: "string"}), do: nil
-  defp default_value(%FieldDef{required: true, type: "user"}), do: nil
+  # Required string/user fields with no default get a "TODO" placeholder so
+  # the doc is structurally valid. Content validation will still flag them.
+  defp default_value(%FieldDef{required: true, type: "string"}), do: "TODO"
+  defp default_value(%FieldDef{required: true, type: "user"}), do: "TODO"
   defp default_value(_), do: nil
 
   defp render_sections(sections, level) do
