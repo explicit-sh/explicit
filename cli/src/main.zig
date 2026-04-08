@@ -1081,17 +1081,29 @@ fn findGitRoot(allocator: mem.Allocator) ![]const u8 {
         stderr().writeAll("Fix: cd .. && cd $(basename $PWD)\n") catch {};
         process.exit(1);
     };
+    const cwd_owned = try allocator.dupe(u8, cwd);
     var dir = try allocator.dupe(u8, cwd);
 
     while (true) {
         const git_path = try std.fmt.allocPrint(allocator, "{s}/.git", .{dir});
         const found = if (fs.accessAbsolute(git_path, .{})) true else |_| false;
         allocator.free(git_path);
-        if (found) return dir;
+        if (found) {
+            allocator.free(cwd_owned);
+            return dir;
+        }
 
         // dirname returns a slice INTO dir, so dupe parent BEFORE freeing dir
-        const parent = std.fs.path.dirname(dir) orelse return dir;
-        if (mem.eql(u8, parent, dir)) return dir;
+        const parent = std.fs.path.dirname(dir) orelse {
+            // No parent — fall back to CWD instead of returning "/"
+            allocator.free(dir);
+            return cwd_owned;
+        };
+        if (mem.eql(u8, parent, dir)) {
+            // Reached filesystem root without finding .git — fall back to CWD
+            allocator.free(dir);
+            return cwd_owned;
+        }
         const parent_owned = try allocator.dupe(u8, parent);
         allocator.free(dir);
         dir = parent_owned;
