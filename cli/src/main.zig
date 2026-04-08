@@ -497,7 +497,11 @@ fn checkQuality(allocator: mem.Allocator, sock_path: []const u8) !bool {
     defer allocator.free(response);
     if (mem.indexOf(u8, response, "\"clean\":true") != null) return false;
 
-    // Output concise summary to stderr (what Claude sees)
+    // Output concise, actionable summary to stderr (what Claude sees).
+    // Fixes EXPLICIT-FEEDBACK.md #7: the old message just said a count
+    // and pointed at `explicit violations`, which doesn't show doc errors.
+    // Now we inline file paths + codes + messages and point at the right
+    // follow-up command per category.
     const err = stderr();
 
     // Count non-zero categories
@@ -510,20 +514,61 @@ fn checkQuality(allocator: mem.Allocator, sock_path: []const u8) !bool {
     if (iron > 0) { err.print("{d} code violations", .{iron}) catch {}; sep = true; }
     if (docs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing @doc", .{docs}) catch {}; sep = true; }
     if (doc_errs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} doc errors", .{doc_errs}) catch {}; }
-    err.writeAll("\nRun `explicit violations` for full list.\n") catch {};
+    err.writeAll("\n") catch {};
 
-    // Show top 3 files with violations
-    var file_it = mem.splitSequence(u8, response, "\"file\":\"");
-    _ = file_it.next();
-    var count: u32 = 0;
-    while (file_it.next()) |chunk| {
-        if (count < 3) {
-            if (mem.indexOf(u8, chunk, "\"")) |end| {
-                err.print("  {s}\n", .{chunk[0..end]}) catch {};
-                count += 1;
+    // Walk the `files` array from the quality response. Each entry is either:
+    //   - a doc-error entry: {file, code, message, id?}
+    //   - a code-file entry: {file, mtime, count, issues: {...}}
+    // We print whichever fields are present, capping at 10 items.
+    const files_marker = "\"files\":[";
+    if (mem.indexOf(u8, response, files_marker)) |files_pos| {
+        const body = response[files_pos + files_marker.len ..];
+        var idx: usize = 0;
+        var shown: u32 = 0;
+        while (idx < body.len and shown < 10) {
+            // Stop if we hit the end of the array
+            while (idx < body.len and (body[idx] == ',' or body[idx] == ' ')) : (idx += 1) {}
+            if (idx >= body.len or body[idx] == ']') break;
+            if (body[idx] != '{') break;
+
+            // Find matching '}' — the objects are flat except for the
+            // `issues` sub-object. Count braces.
+            var depth: u32 = 0;
+            var obj_end: usize = idx;
+            while (obj_end < body.len) : (obj_end += 1) {
+                if (body[obj_end] == '{') depth += 1;
+                if (body[obj_end] == '}') {
+                    depth -= 1;
+                    if (depth == 0) break;
+                }
             }
+            if (obj_end >= body.len) break;
+
+            const obj = body[idx .. obj_end + 1];
+            const file = extractJsonString(obj, "\"file\":\"") orelse "";
+            const code = extractJsonString(obj, "\"code\":\"");
+            const message = extractJsonString(obj, "\"message\":\"");
+            const count = extractJsonInt(obj, "\"count\":");
+
+            if (code) |c| {
+                // Doc-error entry
+                err.print("  {s}  {s}  {s}\n", .{ file, c, message orelse "" }) catch {};
+            } else if (count) |n| {
+                // Code-file entry (aggregated per file)
+                err.print("  {s}  ({d} issue(s))\n", .{ file, n }) catch {};
+            } else {
+                err.print("  {s}\n", .{file}) catch {};
+            }
+
+            shown += 1;
+            idx = obj_end + 1;
         }
     }
+
+    // Context-aware follow-up commands
+    if (doc_errs > 0) err.writeAll("Fix doc errors: explicit docs validate\n") catch {};
+    if (iron > 0) err.writeAll("Fix code violations: explicit violations --json\n") catch {};
+    if (docs > 0) err.writeAll("Add missing @doc attributes to the flagged public functions.\n") catch {};
 
     return true;
 }
@@ -1279,31 +1324,9 @@ fn printHuman(response: []const u8) !void {
         }
         try out.writeAll("\n");
 
-        // Files (top 5, newest first)
-        {
-            var it = mem.splitSequence(u8, response, "\"file\":\"");
-            _ = it.next();
-            var count: u32 = 0;
-            // Skip to the "files" array entries
-            while (it.next()) |chunk| {
-                if (count < 5) {
-                    if (mem.indexOf(u8, chunk, "\"")) |end| {
-                        const file = chunk[0..end];
-                        // Extract issue counts for this file
-                        if (mem.indexOf(u8, chunk, "\"count\":")) |cpos| {
-                            if (extractJsonInt(chunk[cpos..], "\"count\":")) |c| {
-                                try out.print("  {s}: {d} issues\n", .{ file, c });
-                            } else {
-                                try out.print("  {s}\n", .{file});
-                            }
-                        } else {
-                            try out.print("  {s}\n", .{file});
-                        }
-                        count += 1;
-                    }
-                }
-            }
-        }
+        // Files: walk the `files` array and print each entry with code+message
+        // (for doc errors) or count (for code-file aggregates). Cap at 10.
+        try printQualityFileList(response, out);
 
         // Fix instructions (compact, one line each)
         {
@@ -1344,16 +1367,10 @@ fn printHuman(response: []const u8) !void {
         if (extractJsonInt(response, "\"total\":")) |n| {
             try out.print("{d} violation(s):\n", .{n});
         }
-        // Print each violation message
-        var it = mem.splitSequence(u8, response, "\"message\":\"");
-        _ = it.next(); // skip prefix
-        while (it.next()) |chunk| {
-            if (mem.indexOf(u8, chunk, "\"")) |end| {
-                try out.writeAll("  ");
-                try out.writeAll(chunk[0..end]);
-                try out.writeAll("\n");
-            }
-        }
+        // Extract path:line CHECK message for each violation.
+        // Fixes EXPLICIT-FEEDBACK.md #12 — old output was just message text,
+        // which is not actionable without a code and file path.
+        try printViolationList(response, out);
         return;
     }
 
@@ -1468,6 +1485,91 @@ fn extractJsonInt(response: []const u8, key: []const u8) ?i64 {
     while (end < response.len and (response[end] >= '0' and response[end] <= '9')) : (end += 1) {}
     if (end == start) return null;
     return std.fmt.parseInt(i64, response[start..end], 10) catch null;
+}
+
+/// Print the `files` array from a quality response. Each entry is either:
+///   - doc-error: {file, code, message, id?}
+///   - code-file aggregate: {file, count, issues, mtime}
+/// Prints up to `max` items.
+fn printQualityFileList(response: []const u8, out: fs.File.DeprecatedWriter) !void {
+    const files_marker = "\"files\":[";
+    const files_pos = mem.indexOf(u8, response, files_marker) orelse return;
+    const body = response[files_pos + files_marker.len ..];
+
+    var idx: usize = 0;
+    var shown: u32 = 0;
+    const max: u32 = 10;
+    while (idx < body.len and shown < max) {
+        while (idx < body.len and (body[idx] == ',' or body[idx] == ' ')) : (idx += 1) {}
+        if (idx >= body.len or body[idx] == ']') break;
+        if (body[idx] != '{') break;
+
+        // Find matching close brace, counting depth (entries may contain nested `issues` obj)
+        var depth: u32 = 0;
+        var obj_end: usize = idx;
+        while (obj_end < body.len) : (obj_end += 1) {
+            if (body[obj_end] == '{') depth += 1;
+            if (body[obj_end] == '}') {
+                depth -= 1;
+                if (depth == 0) break;
+            }
+        }
+        if (obj_end >= body.len) break;
+
+        const obj = body[idx .. obj_end + 1];
+        const file = extractJsonString(obj, "\"file\":\"") orelse "";
+        const code = extractJsonString(obj, "\"code\":\"");
+        const message = extractJsonString(obj, "\"message\":\"");
+        const count = extractJsonInt(obj, "\"count\":");
+
+        if (code) |c| {
+            try out.print("  {s}  {s}  {s}\n", .{ file, c, message orelse "" });
+        } else if (count) |n| {
+            try out.print("  {s}  ({d} issue(s))\n", .{ file, n });
+        } else if (file.len > 0) {
+            try out.print("  {s}\n", .{file});
+        }
+
+        shown += 1;
+        idx = obj_end + 1;
+    }
+}
+
+/// Print `violations` array entries in `path:line  CHECK  message` format.
+/// Each entry in the array is a JSON object with at least file/line/check/message.
+fn printViolationList(response: []const u8, out: fs.File.DeprecatedWriter) !void {
+    // Find start of the violations array
+    const arr_marker = "\"violations\":[";
+    const arr_start = mem.indexOf(u8, response, arr_marker) orelse return;
+    const body = response[arr_start + arr_marker.len ..];
+
+    // Walk objects separated by "},{" (or bounded by initial "{" and final "}")
+    var idx: usize = 0;
+    while (idx < body.len) {
+        // Find the next object start
+        const obj_start = mem.indexOfScalarPos(u8, body, idx, '{') orelse return;
+        // Find the matching closing brace (simple: next '}' since violations have
+        // no nested objects in the current server output).
+        const obj_end_rel = mem.indexOfScalarPos(u8, body, obj_start + 1, '}') orelse return;
+        const obj = body[obj_start .. obj_end_rel + 1];
+
+        const file = extractJsonString(obj, "\"file\":\"") orelse "";
+        const check = extractJsonString(obj, "\"check\":\"") orelse "";
+        const message = extractJsonString(obj, "\"message\":\"") orelse "";
+        const line = extractJsonInt(obj, "\"line\":") orelse 0;
+
+        if (file.len > 0 or message.len > 0) {
+            if (line > 0) {
+                try out.print("  {s}:{d}  {s}  {s}\n", .{ file, line, check, message });
+            } else {
+                try out.print("  {s}  {s}  {s}\n", .{ file, check, message });
+            }
+        }
+
+        idx = obj_end_rel + 1;
+        // Stop at end of array
+        if (idx < body.len and body[idx] == ']') return;
+    }
 }
 
 fn findServerBinary(allocator: mem.Allocator) !?[]const u8 {
