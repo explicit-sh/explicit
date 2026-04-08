@@ -295,6 +295,7 @@ fn envWithSelfInPath(allocator: mem.Allocator) !std.process.EnvMap {
                 if (mem.eql(u8, d, dir)) return env;
             }
             const new_path = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ dir, existing });
+            defer allocator.free(new_path);
             try env.put("PATH", new_path);
         }
     }
