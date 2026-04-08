@@ -454,24 +454,29 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         _ = fmt.wait() catch {};
     }
 
-    // Compile with warnings-as-errors — report any warnings to Claude
+    // Compile with warnings-as-errors — redirect output to log file to avoid
+    // pipe deadlock on verbose output. Same pattern as mix test above.
+    const compile_log = "/tmp/explicit-mix-compile.log";
     compile_blk: {
-        var compile = std.process.Child.init(&.{ "mix", "compile", "--warnings-as-errors" }, allocator);
-        compile.cwd = mix_dir;
-        compile.stdout_behavior = .Pipe;
-        compile.stderr_behavior = .Pipe;
+        const cmd = std.fmt.allocPrint(
+            allocator,
+            "cd {s} && mix compile --warnings-as-errors > {s} 2>&1",
+            .{ mix_dir, compile_log },
+        ) catch break :compile_blk;
+        defer allocator.free(cmd);
+        var compile = std.process.Child.init(&.{ "bash", "-c", cmd }, allocator);
+        compile.stdout_behavior = .Ignore;
+        compile.stderr_behavior = .Ignore;
         _ = compile.spawn() catch break :compile_blk;
         const term = compile.wait() catch break :compile_blk;
         if (term.Exited != 0) {
-            // Read stderr for warning messages
-            if (compile.stderr) |pipe| {
-                var buf: [4096]u8 = undefined;
-                const n = pipe.read(&buf) catch 0;
-                if (n > 0) {
-                    stderr().writeAll("Compile warnings:\n") catch {};
-                    stderr().writeAll(buf[0..n]) catch {};
-                }
-            }
+            stderr().writeAll("Compile: FAILED\n") catch {};
+            if (fs.openFileAbsolute(compile_log, .{})) |f| {
+                defer f.close();
+                const content = f.readToEndAlloc(allocator, 256 * 1024) catch "";
+                defer if (content.len > 0) allocator.free(content);
+                stderr().writeAll(content) catch {};
+            } else |_| {}
             has_issues = true;
         }
     }
@@ -490,13 +495,22 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
             _ = validate.spawn() catch {};
             if (validate.wait()) |term| {
                 if (term.Exited != 0) {
+                    stderr().writeAll("tofu validate: FAILED\n") catch {};
                     has_issues = true;
                 }
             } else |_| {}
         } else |_| {}
     }
 
-    if (has_issues) process.exit(2);
+    if (has_issues) {
+        // Safeguard: Claude Code collapses Stop hook display to the first
+        // stderr line and hides hooks with zero stderr output as "no output".
+        // If we got here via a check that failed without writing anything
+        // (e.g. a bug in one of the blocks above), make sure Claude sees
+        // SOMETHING actionable rather than an empty "No stderr output" box.
+        stderr().writeAll("explicit hooks claude stop: issues found (exit 2). Run `explicit quality --json` + `mix test` to see details.\n") catch {};
+        process.exit(2);
+    }
     stderr().writeAll("All checks passed.\n") catch {};
     process.exit(0);
 }
