@@ -27,18 +27,50 @@ defmodule Explicit.SystemPrompt do
 
     ### Phase 2: Document decisions (MANDATORY before any code)
 
-    4. Create an OPP (opportunity) document:
+    ⚠️  OPP vs ADR — you MUST get this right or the Stop hook blocks you:
+
+    - OPP = **WHY** we build it. Customer problem / business outcome.
+      Titled in plain language a non-technical stakeholder understands.
+      Success measured in business KPIs (revenue, retention, time saved).
+    - ADR = **HOW** we build it. Technical decision between alternatives.
+      Titled with the technical problem being solved.
+      Success measured in technical trade-offs.
+
+    If the title names a technology, pipeline, service, queue, classifier,
+    data model, framework, or any engineering concept → it's an ADR.
+    If the title describes a user's pain or a business outcome → it's an OPP.
+
+    BAD OPP titles (these are all ADRs):
+      ❌ "Classifier-driven crawler pipeline"
+      ❌ "Migrate to PostgreSQL"
+      ❌ "Use Phoenix LiveView for real-time UI"
+      ❌ "Refactor the order service"
+
+    GOOD OPP titles (customer outcomes):
+      ✅ "Shoppers waste 10+ minutes finding in-stock items across stores"
+      ✅ "Farm loses weekend buyers who can't reach the Saturday market"
+      ✅ "Parents can't share a shopping list between phones"
+
+    4. Create an OPP (opportunity) document describing the CUSTOMER PROBLEM:
        ```bash
-       explicit docs new opp "Title from user's request"
+       explicit docs new opp "Users cannot <do X> because <pain>"
        ```
        Read the generated file path and ID (e.g., OPP-001) from stdout.
-       Edit the file to fill in Description, Impact, and Success Metrics from the answers.
+       Fill Description (who/what/why), Impact (business outcome), Success
+       Metrics (business KPIs — NOT latency or throughput).
 
-    5. Create an ADR (architecture decision) for the main technical choice:
+       If you catch yourself writing about technology in the OPP — STOP.
+       That content belongs in an ADR.
+
+    5. Create an ADR (architecture decision) for each major TECHNICAL choice.
+       The title should describe the technical problem, NOT the chosen tool:
        ```bash
-       explicit docs new adr "Use Phoenix LiveView for real-time UI"
+       explicit docs new adr "Deliver real-time order updates to the browser"
        ```
-       Fill in Context, Decision, and Consequences sections.
+       (Not "Use LiveView" — the technology choice goes inside the Decision
+       section with the rationale for picking it over alternatives.)
+       Fill in Context (problem + constraints), Decision (WHY this pick),
+       Consequences (Positive AND Negative — both are required).
 
     6. Create a SPEC for the core feature with Gherkin scenarios:
        ```bash
@@ -193,18 +225,50 @@ defmodule Explicit.SystemPrompt do
 
     ### Phase 2: Document decisions (MANDATORY before any code)
 
-    4. Create an OPP (opportunity) document:
+    ⚠️  OPP vs ADR — you MUST get this right or the Stop hook blocks you:
+
+    - OPP = **WHY** we build it. Customer problem / business outcome.
+      Titled in plain language a non-technical stakeholder understands.
+      Success measured in business KPIs (revenue, retention, time saved).
+    - ADR = **HOW** we build it. Technical decision between alternatives.
+      Titled with the technical problem being solved.
+      Success measured in technical trade-offs.
+
+    If the title names a technology, pipeline, service, queue, classifier,
+    data model, framework, or any engineering concept → it's an ADR.
+    If the title describes a user's pain or a business outcome → it's an OPP.
+
+    BAD OPP titles (these are all ADRs):
+      ❌ "Classifier-driven crawler pipeline"
+      ❌ "Migrate to PostgreSQL"
+      ❌ "Use Phoenix LiveView for real-time UI"
+      ❌ "Refactor the order service"
+
+    GOOD OPP titles (customer outcomes):
+      ✅ "Shoppers waste 10+ minutes finding in-stock items across stores"
+      ✅ "Farm loses weekend buyers who can't reach the Saturday market"
+      ✅ "Parents can't share a shopping list between phones"
+
+    4. Create an OPP (opportunity) document describing the CUSTOMER PROBLEM:
        ```bash
-       explicit docs new opp "Title from user's request"
+       explicit docs new opp "Users cannot <do X> because <pain>"
        ```
        Read the generated file path and ID (e.g., OPP-001) from stdout.
-       Edit the file to fill in Description, Impact, and Success Metrics from the answers.
+       Fill Description (who/what/why), Impact (business outcome), Success
+       Metrics (business KPIs — NOT latency or throughput).
 
-    5. Create an ADR (architecture decision) for the main technical choice:
+       If you catch yourself writing about technology in the OPP — STOP.
+       That content belongs in an ADR.
+
+    5. Create an ADR (architecture decision) for each major TECHNICAL choice.
+       The title should describe the technical problem, NOT the chosen tool:
        ```bash
-       explicit docs new adr "Use Phoenix LiveView for real-time UI"
+       explicit docs new adr "Deliver real-time order updates to the browser"
        ```
-       Fill in Context, Decision, and Consequences sections.
+       (Not "Use LiveView" — the technology choice goes inside the Decision
+       section with the rationale for picking it over alternatives.)
+       Fill in Context (problem + constraints), Decision (WHY this pick),
+       Consequences (Positive AND Negative — both are required).
 
     6. Create a SPEC for the core feature with Gherkin scenarios:
        ```bash

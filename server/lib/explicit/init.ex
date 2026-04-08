@@ -310,8 +310,22 @@ defmodule Explicit.Init do
     EVERY TECHNICAL CHOICE GETS A RECORD
     ```
 
-    Database, framework, library, caching strategy, API design — if you're choosing
-    between alternatives, write an ADR. Future-you will thank present-you.
+    Database, framework, library, caching strategy, API design, pipeline
+    structure, data model — if you're choosing between technical alternatives,
+    write an ADR. Future-you will thank present-you.
+
+    ## ADR vs OPP
+
+    - ADR = **HOW** we build it (technical, for engineers)
+    - OPP = **WHY** we build it (customer value, for product/business)
+
+    If the decision names a technology, service, data flow, or engineering
+    approach → ADR. If it describes a user's problem or a business outcome
+    → OPP. See the `opportunity` skill for the full distinction.
+
+    Technical work like "crawler pipeline design", "queue vs stream",
+    "Postgres vs TigerBeetle", "classifier architecture" — these are ALL
+    ADRs, not OPPs.
 
     ## Workflow
 
@@ -366,47 +380,92 @@ defmodule Explicit.Init do
     ## Iron Law
 
     ```
-    VALIDATE BEFORE YOU BUILD
+    OPPORTUNITIES ARE ABOUT CUSTOMERS, NOT CODE
     ```
 
-    Every feature request starts as an opportunity. Understand the problem and
-    success criteria BEFORE writing any code.
+    An OPP describes a USER PROBLEM or BUSINESS OUTCOME — never a technical
+    solution, pipeline, architecture, or implementation approach.
+
+    If your title names a technology, pipeline, service, or data structure,
+    STOP. You are writing an ADR, not an OPP.
+
+    ## The two-part test — answer BOTH before writing an OPP
+
+    1. **Customer test:** Can a non-technical stakeholder (the farm owner,
+       the shop customer, a parent using the app) read the title and
+       understand what changes for them? If not — it's not an OPP.
+    2. **Why test:** Could two engineers solve this OPP with completely
+       different technologies and both satisfy it? If no — it's an ADR.
+
+    ## OPP vs ADR — quick reference
+
+    | Aspect        | OPP (Opportunity)               | ADR (Architecture Decision)      |
+    | ------------- | ------------------------------- | -------------------------------- |
+    | Answers       | "Should we do this?"            | "How should we build it?"        |
+    | Audience      | Product / business / user       | Engineers                        |
+    | Title names   | User problem or outcome         | Technical problem being solved   |
+    | Measured by   | Business KPIs (revenue, NPS)    | Technical trade-offs             |
+    | Example title | "Buyers can't find local stock" | "Cache inventory for fast reads" |
+
+    ## BAD OPP titles (these are ADRs, not OPPs!)
+
+    - ❌ "Classifier-driven crawler pipeline" → this is HOW, not WHY
+    - ❌ "Migrate to PostgreSQL" → technical choice, write an ADR
+    - ❌ "Add Redis cache layer" → implementation detail, write an ADR
+    - ❌ "Refactor the order service" → internal concern, no customer value
+    - ❌ "Upgrade to Phoenix 1.8" → maintenance task, not an opportunity
+
+    ## GOOD OPP titles (problem/outcome framed)
+
+    - ✅ "Shoppers waste 10+ minutes finding in-stock items across stores"
+    - ✅ "Farm loses 30% of weekly demand from customers outside market hours"
+    - ✅ "Parents can't share a shopping list between phones"
+    - ✅ "New users abandon signup because address lookup is too slow"
 
     ## Workflow
 
-    1. Ask: What outcome are we trying to achieve?
-    2. Ask: Who benefits and how will we measure success?
-    3. Ask: What are the risks and constraints?
-    4. Create: `explicit docs new opp "Opportunity Title"`
-    5. Fill Description (≥30 words: what + why it matters)
-    6. Fill Success Metrics (measurable KPIs)
-    7. Validate: `explicit docs validate`
+    1. Ask: Who is the user and what outcome do they want?
+    2. Ask: What pain or loss happens today without this?
+    3. Ask: How will we measure success (business KPIs, not technical ones)?
+    4. Apply the two-part test above. If it fails → write an ADR instead.
+    5. Create: `explicit docs new opp "User-facing outcome in plain language"`
+    6. Fill Description (≥30 words: user + pain + why it matters NOW)
+    7. Fill Success Metrics (revenue, retention, conversion, time-saved — NOT
+       "ms latency" or "lines of code removed")
+    8. Validate: `explicit docs validate`
 
     ## Example
 
     ```markdown
-    # Online llama milk subscription service
+    # Farm loses weekend buyers who can't reach the market
 
     ## Description
-    Health-conscious consumers want regular llama milk delivery but our farm
-    only sells at weekly markets. An online subscription service would reach
-    customers beyond our local area and provide predictable revenue.
+    Our llama milk farm only sells at the Saturday market (8-12am). Regular
+    customers tell us they want weekly delivery but have no way to order
+    between markets. We are turning away predictable revenue every week.
 
     ## Impact
-    - Expand customer base from 50 local buyers to potentially 500+ nationwide
-    - Predictable monthly revenue vs. variable market sales
+    - Reach buyers who work Saturday mornings (currently unreachable)
+    - Convert one-off market buyers into predictable recurring revenue
 
     ## Success Metrics
-    - 100 subscribers within 3 months of launch
-    - 80% month-over-month retention rate
+    - 100 recurring subscribers within 3 months
+    - 80% month-over-month retention
     - Average order value > $45
     ```
 
-    ## Red Flags — STOP and Re-read
+    Note: this example says NOTHING about "subscription service", "website",
+    "Phoenix LiveView", or "Stripe". Those are ADRs that come LATER. The OPP
+    only describes the customer problem and the business outcome.
 
-    - Building features before creating an OPP (validate first!)
-    - No success metrics (how will you know it worked?)
-    - Description is a solution ("build a website") not a problem ("customers can't order online")
+    ## Red Flags — STOP and rewrite
+
+    - Title contains a technology, pipeline, or implementation word
+    - Description says "build X" instead of "users cannot Y"
+    - Success metrics are technical (latency, throughput, test coverage)
+    - A non-technical stakeholder cannot understand the title
+    - Two engineers would interpret it the same way technically (that means
+      the OPP is already prescribing the solution)
     """
   end
 
