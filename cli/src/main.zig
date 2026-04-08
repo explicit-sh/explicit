@@ -404,14 +404,21 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
     // Find the mix project dir (services/*/ or project root)
     const mix_dir = findMixDir(allocator, git_root) orelse git_root;
 
-    // Run mix test directly (server's System.cmd can't find mix in OTP release)
+    // Run mix test — redirect output to a log file via bash so the hook's
+    // own stderr stays concise. Claude Code's Stop hook display collapses
+    // to the first stderr line, so flooding stderr with mix test output
+    // makes actual failures invisible.
+    const test_log = "/tmp/explicit-mix-test.log";
     test_blk: {
-        stderr().writeAll("Running mix test...\n") catch {};
-        var test_proc = std.process.Child.init(&.{ "mix", "test" }, allocator);
-        test_proc.cwd = mix_dir;
-        // Inherit stdout/stderr so output goes to terminal and pipe doesn't deadlock
-        test_proc.stdout_behavior = .Inherit;
-        test_proc.stderr_behavior = .Inherit;
+        const cmd = std.fmt.allocPrint(
+            allocator,
+            "cd {s} && mix test > {s} 2>&1",
+            .{ mix_dir, test_log },
+        ) catch break :test_blk;
+        defer allocator.free(cmd);
+        var test_proc = std.process.Child.init(&.{ "bash", "-c", cmd }, allocator);
+        test_proc.stdout_behavior = .Ignore;
+        test_proc.stderr_behavior = .Ignore;
         var test_env = try std.process.getEnvMap(allocator);
         defer test_env.deinit();
         try test_env.put("MIX_ENV", "test");
@@ -420,6 +427,19 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         const test_term = test_proc.wait() catch break :test_blk;
         if (test_term.Exited != 0) {
             stderr().writeAll("Tests: FAILED\n") catch {};
+            // Print tail of log (last ~60 lines) so Claude sees the failure
+            if (fs.openFileAbsolute(test_log, .{})) |f| {
+                defer f.close();
+                const content = f.readToEndAlloc(allocator, 512 * 1024) catch "";
+                defer if (content.len > 0) allocator.free(content);
+                var start: usize = content.len;
+                var nl: usize = 0;
+                while (start > 0 and nl < 60) : (start -= 1) {
+                    if (content[start - 1] == '\n') nl += 1;
+                }
+                stderr().writeAll(content[start..]) catch {};
+                stderr().print("\n(full log: {s})\n", .{test_log}) catch {};
+            } else |_| {}
             has_issues = true;
         }
     }
