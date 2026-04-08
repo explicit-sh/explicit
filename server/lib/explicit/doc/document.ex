@@ -77,11 +77,19 @@ defmodule Explicit.Doc.Document do
     end
   end
 
-  @doc "Extract document type from path (e.g., docs/architecture/adr-001.md -> adr)"
+  @doc """
+  Extract document type from path. Accepts both bare IDs and slugged forms:
+  - docs/architecture/adr-001.md -> adr
+  - docs/architecture/adr-001-my-slug.md -> adr
+  - docs/opportunities/opp-042-users-cannot-order.md -> opp
+  - README.md -> readme
+  """
   def path_to_type(path) do
     basename = Path.basename(path, ".md")
-    case Regex.run(~r/^([a-z]+)-\d+$/, String.downcase(basename)) do
-      [_, type] -> type
+    # Accept optional -slug suffix. This fixes F000 false positives for docs
+    # created via `explicit docs new` which slugifies the title into the filename.
+    case Regex.run(~r/^([a-z]+)-\d+(-.*)?$/, String.downcase(basename)) do
+      [_, type | _] -> type
       _ ->
         if String.downcase(basename) == "readme", do: "readme", else: nil
     end

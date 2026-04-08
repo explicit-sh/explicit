@@ -223,7 +223,6 @@ defmodule Explicit.Init do
         field "author" type="user" required=#true
         field "date" type="string" required=#true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
         field "tags" type="string[]"
-        field "code_paths" type="string[]"
         section "Context" required=#true
         section "Decision" required=#true
         section "Consequences" required=#true {

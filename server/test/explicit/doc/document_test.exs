@@ -49,6 +49,19 @@ defmodule Explicit.Doc.DocumentTest do
     assert Document.path_to_type("README.md") == "readme"
   end
 
+  test "extracts type from slugged filename (F000 regression)" do
+    # docs created via `explicit docs new` have the title slugified into
+    # the filename. The old regex only matched bare <type>-<number>, causing
+    # F000 "Unknown document type" for every new doc.
+    assert Document.path_to_type("docs/architecture/adr-001-use-postgresql.md") == "adr"
+    assert Document.path_to_type("docs/opportunities/opp-042-users-cannot-order.md") == "opp"
+    assert Document.path_to_type("docs/specs/spec-003-core-user-flow.md") == "spec"
+    assert Document.path_to_type("docs/incidents/inc-001-api-outage.md") == "inc"
+    # Still returns nil for unrecognizable filenames
+    assert Document.path_to_type("random-file.md") == nil
+    assert Document.path_to_type("notes.md") == nil
+  end
+
   test "parses sections" do
     {:ok, doc} = Document.parse(@valid_adr, "adr-001.md")
     section_names = Enum.map(doc.sections, & &1.name)

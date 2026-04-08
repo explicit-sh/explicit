@@ -113,18 +113,9 @@ defmodule Explicit.ConnectionHandler do
       case Document.parse_file(file) do
         {:ok, doc} ->
           {:ok, diags} = Validation.validate(doc, schema)
+          DocStore.put(file, diags)
 
-          # Check for code_paths in frontmatter (forbidden — links go code → docs)
-          code_paths_diags = if Map.has_key?(doc.frontmatter, "code_paths") do
-            [{:error, "F010", "Field 'code_paths' is not allowed in frontmatter. Links go from code to docs, not the other way. Remove code_paths and reference doc IDs in your Elixir code instead (e.g. @moduledoc \"Implements #{doc.id}\")."}]
-          else
-            []
-          end
-
-          all_diags = diags ++ code_paths_diags
-          DocStore.put(file, all_diags)
-
-          Enum.map(all_diags, fn {level, code, msg} ->
+          Enum.map(diags, fn {level, code, msg} ->
             %{file: file, id: doc.id, level: to_string(level), code: code, message: msg}
           end)
         {:error, msg} ->
@@ -132,9 +123,8 @@ defmodule Explicit.ConnectionHandler do
       end
     end)
 
-    # Validate code
-    code_files = Path.wildcard(Path.join(project_dir, "lib/**/*.ex")) ++
-                 Path.wildcard(Path.join(project_dir, "services/**/lib/**/*.ex"))
+    # Validate code — skip _build/, deps/, etc. (see Watcher.ignored?/1)
+    code_files = discover_code_files(project_dir)
     code_results = Enum.flat_map(code_files, fn file ->
       case Checker.check_file(file) do
         {:ok, violations} -> violations
@@ -169,43 +159,83 @@ defmodule Explicit.ConnectionHandler do
 
   defp handle_method("quality", _params) do
     project_dir = Application.get_env(:explicit, :project_dir, ".")
+    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
 
     # Run project-level checks (duplicate migrations, test files in lib/)
     project_violations = Checker.project_checks(project_dir)
 
-    # Refresh doc cache before reading summary (validate always runs fresh)
-    refresh_doc_cache(project_dir)
+    # Live-derive doc diagnostics from current disk state. We DO NOT read
+    # DocStore.summary because it carries stale rows from deleted/renamed
+    # docs — the cause of EXPLICIT-FEEDBACK.md #1. Every `quality` call
+    # walks Discovery fresh and validates on the spot.
+    doc_diagnostics =
+      Discovery.discover(project_dir, schema)
+      |> Enum.flat_map(fn file ->
+        case Document.parse_file(file) do
+          {:ok, doc} ->
+            {:ok, diags} = Validation.validate(doc, schema)
+            DocStore.put(file, diags)
+            Enum.map(diags, fn {level, code, msg} ->
+              %{file: file, id: doc.id, level: level, code: code, message: msg}
+            end)
 
-    # Aggregate all results
+          {:error, msg} ->
+            [%{file: file, id: nil, level: :error, code: "F000", message: msg}]
+        end
+      end)
+
+    doc_errors = Enum.count(doc_diagnostics, &(&1.level == :error))
+    doc_warnings = Enum.count(doc_diagnostics, &(&1.level == :warning))
+
+    # doc_error_files is populated from the SAME diagnostics list as doc_errors.
+    # They must never disagree — that was EXPLICIT-FEEDBACK.md #11.
+    doc_error_files =
+      doc_diagnostics
+      |> Enum.filter(&(&1.level == :error))
+      |> Enum.map(fn d ->
+        %{
+          file: Path.relative_to(d.file, project_dir),
+          id: d.id,
+          code: d.code,
+          message: d.message
+        }
+      end)
+
+    # Aggregate code results (ViolationStore is authoritative for code; it's
+    # kept fresh by the Watcher on every .ex edit).
     code_summary = ViolationStore.summary()
-    doc_summary = DocStore.summary()
-
-    # Count by category
     all_violations = Enum.flat_map(ViolationStore.all(), fn {_path, vs} -> vs end)
     tests_in_lib = Enum.filter(project_violations, &(&1.check == "NoTestInLibDir"))
     missing_docs = Enum.count(all_violations, &(&1.check == "NoPublicWithoutDoc"))
     iron_law = code_summary.total - missing_docs + length(project_violations)
 
-    clean = iron_law == 0 and doc_summary.errors == 0 and missing_docs == 0
+    clean = iron_law == 0 and doc_errors == 0 and missing_docs == 0
 
-    # Build per-file issue list sorted by most recently modified first
-    file_issues = ViolationStore.all()
-    |> Enum.reject(fn {path, _} -> path == "__project__" end)
-    |> Enum.filter(fn {_, vs} -> vs != [] end)
-    |> Enum.map(fn {path, vs} ->
-      mtime = case File.stat(path) do
-        {:ok, %{mtime: mtime}} -> :calendar.datetime_to_gregorian_seconds(mtime)
-        _ -> 0
-      end
-      rel_path = Path.relative_to(path, project_dir)
-      checks = vs |> Enum.map(& &1.check) |> Enum.frequencies()
-      %{file: rel_path, mtime: mtime, issues: checks, count: length(vs)}
-    end)
-    |> Enum.sort_by(& &1.mtime, :desc)
-    |> Enum.take(10)
+    # Build per-file code-issue list sorted by most recently modified first
+    code_file_issues =
+      ViolationStore.all()
+      |> Enum.reject(fn {path, _} -> path == "__project__" end)
+      |> Enum.filter(fn {_, vs} -> vs != [] end)
+      |> Enum.map(fn {path, vs} ->
+        mtime =
+          case File.stat(path) do
+            {:ok, %{mtime: mtime}} -> :calendar.datetime_to_gregorian_seconds(mtime)
+            _ -> 0
+          end
+
+        rel_path = Path.relative_to(path, project_dir)
+        checks = vs |> Enum.map(& &1.check) |> Enum.frequencies()
+        %{file: rel_path, mtime: mtime, issues: checks, count: length(vs)}
+      end)
+      |> Enum.sort_by(& &1.mtime, :desc)
+      |> Enum.take(10)
+
+    # Unified files list: doc errors AND code-file issues together.
+    files = doc_error_files ++ code_file_issues
 
     # Build actionable fix instructions
-    fix_instructions = build_fix_instructions(iron_law, missing_docs, 0, doc_summary.errors, file_issues)
+    fix_instructions =
+      build_fix_instructions(iron_law, missing_docs, 0, doc_errors, code_file_issues)
 
     Protocol.encode_ok(%{
       clean: clean,
@@ -213,10 +243,10 @@ defmodule Explicit.ConnectionHandler do
       tests_in_lib: length(tests_in_lib),
       missing_docs: missing_docs,
       missing_specs: 0,
-      doc_errors: doc_summary.errors,
-      doc_warnings: doc_summary.warnings,
-      total_issues: iron_law + doc_summary.errors,
-      files: file_issues,
+      doc_errors: doc_errors,
+      doc_warnings: doc_warnings,
+      total_issues: iron_law + doc_errors,
+      files: files,
       fix: fix_instructions,
       details: %{
         project_violations: project_violations,
@@ -428,9 +458,22 @@ defmodule Explicit.ConnectionHandler do
 
     case Map.get(params, "type") do
       nil ->
+        # Return the FULL schema in one call — fields and sections included.
+        # Saves the 5+ per-type round-trips documented in EXPLICIT-FEEDBACK.md #8.
         types = Enum.map(schema.types, fn t ->
-          %{name: t.name, description: t.description, folder: t.folder,
-            aliases: t.aliases, fields: length(t.fields), sections: length(t.sections)}
+          %{
+            name: t.name,
+            description: t.description,
+            folder: t.folder,
+            aliases: t.aliases,
+            fields: Enum.map(t.fields, fn f ->
+              %{name: f.name, type: f.type, required: f.required, values: f.values, description: f.description}
+            end),
+            sections: Enum.map(t.sections, &section_to_map/1),
+            rules: Enum.map(t.rules, fn r ->
+              %{name: r.name, when_field: r.when_field, when_equals: r.when_equals, then_section: r.then_section_table}
+            end)
+          }
         end)
         relations = Enum.map(schema.relations, fn r ->
           %{name: r.name, inverse: r.inverse, cardinality: r.cardinality, description: r.description}
@@ -456,14 +499,6 @@ defmodule Explicit.ConnectionHandler do
             })
         end
     end
-  end
-
-  defp handle_method("doc.check_code", %{"file" => file}) do
-    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
-    project_dir = Application.get_env(:explicit, :project_dir, ".")
-
-    matches = Explicit.Doc.CodePaths.check(file, project_dir, schema)
-    Protocol.encode_ok(%{file: file, matches: matches, total: length(matches)})
   end
 
   defp handle_method("doc.check_fixme", params) do
@@ -668,22 +703,19 @@ defmodule Explicit.ConnectionHandler do
     Enum.reverse(instructions)
   end
 
-  defp refresh_doc_cache(project_dir) do
-    schema = Application.get_env(:explicit, :schema, %Explicit.Schema{})
-    doc_files = Discovery.discover(project_dir, schema)
-    Enum.each(doc_files, fn file ->
-      case Document.parse_file(file) do
-        {:ok, doc} ->
-          {:ok, diags} = Validation.validate(doc, schema)
-          code_paths_diags = if Map.has_key?(doc.frontmatter, "code_paths") do
-            [{:error, "F010", "Field 'code_paths' is not allowed in frontmatter. Links go from code to docs, not the other way. Remove code_paths and reference doc IDs in your Elixir code instead (e.g. @moduledoc \"Implements #{doc.id}\")."}]
-          else
-            []
-          end
-          DocStore.put(file, diags ++ code_paths_diags)
-        {:error, _} -> :ok
-      end
-    end)
+  # Code file discovery for validate/quality — mirrors Watcher's ignore list
+  # so we don't scan _build/, deps/, generator templates, etc.
+  # (EXPLICIT-FEEDBACK.md #4)
+  @ignored_code_dirs ~w(_build deps .elixir_ls .git node_modules .claude .explicit priv/static)
+
+  defp discover_code_files(project_dir) do
+    Path.wildcard(Path.join(project_dir, "**/*.{ex,exs}"))
+    |> Enum.reject(&ignored_code_path?/1)
+  end
+
+  defp ignored_code_path?(path) do
+    path_str = to_string(path)
+    Enum.any?(@ignored_code_dirs, &String.contains?(path_str, "/#{&1}/"))
   end
 
   defp scan_doc_refs(code_files) do
