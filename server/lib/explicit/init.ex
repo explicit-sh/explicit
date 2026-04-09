@@ -211,75 +211,6 @@ defmodule Explicit.Init do
 
   # ─── Templates ─────────────────────────────────────────────────────────────
 
-  defp schema_kdl do
-    # Use full schema from priv if available, otherwise embedded
-    case File.read(Path.join(:code.priv_dir(:explicit), "schema.kdl")) do
-      {:ok, content} -> content
-      _ -> embedded_schema_kdl()
-    end
-  end
-
-  defp embedded_schema_kdl do
-    ~S"""
-    relation "supersedes" inverse="superseded_by" cardinality="one"
-    relation "implements" inverse="implemented_by" cardinality="many"
-    relation "depends_on" inverse="dependency_of" cardinality="many"
-    relation "related" cardinality="many"
-
-    type "adr" description="Architecture Decision Record" folder="docs/architecture" {
-        alias "architecture"
-        field "status" type="enum" required=#true default="proposed" {
-            values "proposed" "accepted" "rejected" "deprecated" "superseded"
-        }
-        field "author" type="user" required=#true
-        field "date" type="string" required=#true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
-        field "tags" type="string[]"
-        section "Context" required=#true
-        section "Decision" required=#true
-        section "Consequences" required=#true {
-            section "Positive" required=#true
-            section "Negative"
-        }
-    }
-
-    type "opp" description="Opportunity" folder="docs/opportunities" {
-        alias "opportunity"
-        field "status" type="enum" required=#true default="identified" {
-            values "identified" "validating" "pursuing" "completed" "deprecated"
-        }
-        field "author" type="user" required=#true
-        field "date" type="string" required=#true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
-        field "tags" type="string[]"
-        section "Description" required=#true
-    }
-
-    type "inc" description="Incident Report" folder="docs/incidents" {
-        alias "incident"
-        field "status" type="enum" required=#true default="open" {
-            values "open" "mitigated" "resolved"
-        }
-        field "severity" type="enum" required=#true {
-            values "sev1" "sev2" "sev3" "sev4"
-        }
-        field "author" type="user" required=#true
-        field "date" type="string" required=#true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
-        section "Summary" required=#true
-        section "Root Cause" required=#true
-    }
-
-    type "spec" description="Behavioral Specification" folder="docs/specs" {
-        alias "feature"
-        field "status" type="enum" required=#true default="draft" {
-            values "draft" "proposed" "approved" "implemented" "deprecated"
-        }
-        field "author" type="user" required=#true
-        field "date" type="string" required=#true pattern="^\\d{4}-\\d{2}-\\d{2}$" default="$TODAY"
-        section "Story" required=#true
-        section "Scenarios" required=#true
-    }
-    """
-  end
-
   defp org_kdl(name) do
     """
     // Organization registry for #{name}
@@ -949,6 +880,15 @@ defmodule Explicit.Init do
         export PGDATA="$DEVENV_STATE/postgres"
       '';
     }
+    """
+  end
+
+  defp devenv_yaml do
+    """
+    # yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+    inputs:
+      nixpkgs:
+        url: github:cachix/devenv-nixpkgs/rolling
     """
   end
 

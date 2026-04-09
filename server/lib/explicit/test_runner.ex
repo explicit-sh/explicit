@@ -4,8 +4,6 @@ defmodule Explicit.TestRunner do
   Handles timeouts gracefully to avoid blocking Claude Code hooks.
   """
 
-  require Logger
-
   @default_timeout 60_000
 
   @doc "Run mix test in the project directory. Returns {:ok, result} or {:error, reason}"

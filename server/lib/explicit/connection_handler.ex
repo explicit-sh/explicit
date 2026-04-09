@@ -278,48 +278,39 @@ defmodule Explicit.ConnectionHandler do
     base_dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
     dir = Path.join(base_dir, name)
     overwrite_paths = Map.get(params, "overwrite_paths", [])
-    case Explicit.Init.run_new(dir, name, overwrite_paths) do
-      {:ok, result} ->
-        Protocol.encode_ok(%{
-          project: result.project,
-          name: result.name,
-          created: result.created
-        })
-      {:error, msg} ->
-        Protocol.encode_error(msg)
-    end
+    {:ok, result} = Explicit.Init.run_new(dir, name, overwrite_paths)
+
+    Protocol.encode_ok(%{
+      project: result.project,
+      name: result.name,
+      created: result.created
+    })
   end
 
   defp handle_method("init", params) do
     dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
     overwrite_paths = Map.get(params, "overwrite_paths", [])
-    case Explicit.Init.run(dir, overwrite_paths) do
-      {:ok, result} ->
-        Protocol.encode_ok(%{
-          project: result.project,
-          name: result.name,
-          created: result.created
-        })
-      {:error, msg} ->
-        Protocol.encode_error(msg)
-    end
+    {:ok, result} = Explicit.Init.run(dir, overwrite_paths)
+
+    Protocol.encode_ok(%{
+      project: result.project,
+      name: result.name,
+      created: result.created
+    })
   end
 
   defp handle_method("scaffold", %{"name" => name} = params) do
     dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
-    case Explicit.Scaffold.run(dir, name) do
-      {:ok, result} ->
-        Protocol.encode_ok(%{
-          project: result.project,
-          name: result.name,
-          created: result.created,
-          phoenix: to_string(result.phoenix),
-          boundary: to_string(result.boundary),
-          deps: to_string(result.deps)
-        })
-      {:error, msg} ->
-        Protocol.encode_error(msg)
-    end
+    {:ok, result} = Explicit.Scaffold.run(dir, name)
+
+    Protocol.encode_ok(%{
+      project: result.project,
+      name: result.name,
+      created: result.created,
+      phoenix: to_string(result.phoenix),
+      boundary: to_string(result.boundary),
+      deps: to_string(result.deps)
+    })
   end
 
   defp handle_method("scaffold", _params) do
