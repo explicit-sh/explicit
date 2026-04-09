@@ -1,5 +1,12 @@
 @CLAUDE.md
 
+## RTK
+
+- Every shell command must be prefixed with `rtk`.
+- Use direct wrappers when available: `rtk ls`, `rtk git status`, `rtk pytest`, `rtk docker ps`.
+- If RTK does not provide a dedicated wrapper, use `rtk proxy ...` instead, for example `rtk proxy ssh user@host` or `rtk proxy mix test`.
+- Do not run bare shell commands when an `rtk ...` or `rtk proxy ...` form can be used.
+
 ## Codex Hooks
 
 - Reference: https://developers.openai.com/codex/hooks

@@ -16,6 +16,20 @@ defmodule Explicit.SystemPrompt do
     project directory. Do NOT cd outside the project or reference absolute paths
     outside it. All files must be created within the project root.
 
+    ## RTK (MANDATORY)
+
+    Every shell command you run MUST be prefixed with `rtk`.
+
+    - Use direct RTK wrappers when available: `rtk ls`, `rtk git status`, `rtk pytest`, `rtk docker ps`
+    - If RTK does not have a dedicated wrapper, use `rtk proxy ...`
+    - Examples:
+      - `rtk ls`
+      - `rtk git diff`
+      - `rtk proxy ssh user@host`
+      - `rtk proxy mix test`
+
+    Never run a bare shell command when an `rtk ...` or `rtk proxy ...` form can be used.
+
     ## Workflow — FOLLOW THIS EXACTLY
 
     ### Phase 1: Understand (MANDATORY before any code)
@@ -189,8 +203,18 @@ defmodule Explicit.SystemPrompt do
     """
   end
 
-  @doc "Return the system prompt for Gemini"
+  @doc "Return the inline startup prompt for Gemini"
   def gemini do
+    """
+    This project uses explicit for code quality, documentation, and workflow guidance.
+
+    Start by getting familiar with the project context in `GEMINI.md` and `AGENTS.md`.
+    Then ask the user how they want to proceed before making changes.
+    """
+  end
+
+  @doc "Return the project GEMINI.md content for Gemini"
+  def gemini_md do
     """
     IMPORTANT: This project uses explicit for code quality and decision documentation.
     You MUST follow this workflow strictly. The Stop hook will block you if you skip steps.
@@ -200,6 +224,20 @@ defmodule Explicit.SystemPrompt do
     You are running inside a nono sandbox. You can ONLY access files in the current
     project directory. Do NOT cd outside the project or reference absolute paths
     outside it. All files must be created within the project root.
+
+    ## RTK (MANDATORY)
+
+    Every shell command you run MUST be prefixed with `rtk`.
+
+    - Use direct RTK wrappers when available: `rtk ls`, `rtk git status`, `rtk pytest`, `rtk docker ps`
+    - If RTK does not have a dedicated wrapper, use `rtk proxy ...`
+    - Examples:
+      - `rtk ls`
+      - `rtk git diff`
+      - `rtk proxy ssh user@host`
+      - `rtk proxy mix test`
+
+    Never run a bare shell command when an `rtk ...` or `rtk proxy ...` form can be used.
 
     ## NEVER read docs or config directly
 
@@ -383,7 +421,7 @@ defmodule Explicit.SystemPrompt do
     Add `# explicit:disable RuleName` to suppress a check on the next line.
     At the top of a file (first 5 lines) it suppresses for the whole file.
 
-    Read CLAUDE.md for project-specific guidelines.
+    Read AGENTS.md for project-specific guidelines.
     """
   end
 end

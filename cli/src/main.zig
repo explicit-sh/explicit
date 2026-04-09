@@ -75,10 +75,44 @@ pub fn main() !void {
             ) catch {};
             return;
         }
-        try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
+        try cmdLaunchAI(allocator, "claude", .file_flag, &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
+        return;
+    } else if (mem.eql(u8, command, "codex")) {
+        if (p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
+            stderr().writeAll(
+                \\explicit codex — Launch Codex with explicit context
+                \\
+                \\Usage: explicit codex [flags] [-- codex-args...]
+                \\
+                \\Flags:
+                \\  --no-sandbox    Skip nono sandbox for this session
+                \\
+                \\Extra flags after explicit's own are passed to codex directly.
+                \\
+            ) catch {};
+            return;
+        }
+        try cmdLaunchAI(allocator, "codex", .none, &.{}, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
-        try cmdLaunchAI(allocator, "gemini", &.{ "--yolo", "-i" }, positional[0..pos_count], no_sandbox);
+        try cmdLaunchAI(allocator, "gemini", .text_flag, &.{ "--yolo", "-i" }, positional[0..pos_count], no_sandbox);
+        return;
+    } else if (mem.eql(u8, command, "opencode")) {
+        if (p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
+            stderr().writeAll(
+                \\explicit opencode — Launch OpenCode with explicit context
+                \\
+                \\Usage: explicit opencode [flags] [-- opencode-args...]
+                \\
+                \\Flags:
+                \\  --no-sandbox    Skip nono sandbox for this session
+                \\
+                \\Extra flags after explicit's own are passed to opencode directly.
+                \\
+            ) catch {};
+            return;
+        }
+        try cmdLaunchAI(allocator, "opencode", .none, &.{}, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
         // init <name>: create project dir + git init, then start server there
@@ -256,7 +290,9 @@ fn printUsage() void {
         \\  explicit violations [file] List code violations
         \\  explicit check <file>      Force re-check a file
         \\  explicit claude            Launch Claude Code with explicit context
+        \\  explicit codex             Launch Codex with explicit context
         \\  explicit gemini            Launch Gemini CLI with explicit context
+        \\  explicit opencode          Launch OpenCode with explicit context
         \\  explicit stop              Stop the server
         \\
         \\Document commands:
@@ -269,10 +305,16 @@ fn printUsage() void {
         \\
         \\Flags:
         \\  --json                     Output raw JSON
-        \\  --no-sandbox               Skip nono sandbox (claude/gemini)
+        \\  --no-sandbox               Skip nono sandbox (claude/codex/gemini/opencode)
         \\
     ) catch {};
 }
+
+const PromptMode = enum {
+    none,
+    file_flag,
+    text_flag,
+};
 
 /// Resolve our binary's directory and store it for child process env injection.
 /// Hooks need `explicit` in PATH — this ensures it's available when launching claude.
@@ -813,39 +855,63 @@ fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) vo
 
 // ─── AI launcher ─────────────────────────────────────────────────────────────
 
-fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []const []const u8, extra_args: []const ?[]const u8, no_sandbox: bool) !void {
-    // 1. Connect to server (auto-starts if needed)
-    var stream = try connectToSocket(allocator);
-
-    // 2. Fetch system prompt
-    const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"system_prompt\",\"params\":{{\"tool\":\"{s}\"}}}}", .{tool_name});
-    defer allocator.free(req);
-
-    const response = sendRequest(allocator, stream, req) catch |err| {
-        stderr().print("Error: server communication failed: {s}\n", .{@errorName(err)}) catch {};
+fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: PromptMode, prompt_flag: []const []const u8, extra_args: []const ?[]const u8, no_sandbox: bool) !void {
+    if (!binaryInPath(allocator, "rtk")) {
+        stderr().print("Error: `rtk` is required to launch explicit {s}. Install rtk and try again.\n", .{tool_name}) catch {};
+        stderr().writeAll("See: https://github.com/rtk-ai/rtk#installation\n") catch {};
         process.exit(1);
-    };
-    defer allocator.free(response);
-    stream.close();
-
-    // 3. Extract prompt text from JSON response
-    const prompt = extractJsonString(response, "\"prompt\":\"") orelse {
-        stderr().writeAll("Error: Could not extract system prompt\n") catch {};
-        process.exit(1);
-    };
-
-    // Unescape \\n to real newlines and write to temp file
-    const unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
-    defer allocator.free(unescaped);
-
-    const prompt_path = "/tmp/explicit-system-prompt.txt";
-    {
-        const f = try fs.createFileAbsolute(prompt_path, .{});
-        defer f.close();
-        try f.writeAll(unescaped);
     }
-    // Gemini's -i flag takes the prompt text directly; Claude uses --append-system-prompt-file
-    const prompt_arg: []const u8 = if (mem.eql(u8, tool_name, "gemini")) unescaped else prompt_path;
+
+    var prompt_arg: ?[]const u8 = null;
+    var unescaped: ?[]u8 = null;
+    defer if (unescaped) |buf| allocator.free(buf);
+
+    if (prompt_mode != .none) {
+        // 1. Connect to server (auto-starts if needed)
+        var stream = try connectToSocket(allocator);
+
+        // 2. Fetch system prompt
+        const req = try std.fmt.allocPrint(allocator, "{{\"method\":\"system_prompt\",\"params\":{{\"tool\":\"{s}\"}}}}", .{tool_name});
+        defer allocator.free(req);
+
+        const response = sendRequest(allocator, stream, req) catch |err| {
+            stderr().print("Error: server communication failed: {s}\n", .{@errorName(err)}) catch {};
+            process.exit(1);
+        };
+        defer allocator.free(response);
+        stream.close();
+
+        // 3. Extract prompt text from JSON response
+        const prompt = extractJsonString(response, "\"prompt\":\"") orelse {
+            stderr().writeAll("Error: Could not extract system prompt\n") catch {};
+            process.exit(1);
+        };
+
+        // Unescape \\n to real newlines and optionally drop sandbox instructions.
+        unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
+
+        if (no_sandbox) {
+            const without_sandbox = try std.mem.replaceOwned(
+                u8,
+                allocator,
+                unescaped.?,
+                "## Sandbox\n\nYou are running inside a nono sandbox. You can ONLY access files in the current\nproject directory. Do NOT cd outside the project or reference absolute paths\noutside it. All files must be created within the project root.\n\n",
+                "",
+            );
+            allocator.free(unescaped.?);
+            unescaped = without_sandbox;
+        }
+
+        if (prompt_mode == .text_flag) {
+            prompt_arg = unescaped.?;
+        } else {
+            const prompt_path = "/tmp/explicit-system-prompt.txt";
+            const f = try fs.createFileAbsolute(prompt_path, .{});
+            defer f.close();
+            try f.writeAll(unescaped.?);
+            prompt_arg = prompt_path;
+        }
+    }
 
     // If devenv.nix exists but we're not inside devenv shell, re-exec through devenv
     const devenv_dir = findDevenvDir(allocator);
@@ -1004,8 +1070,8 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
         stderr().writeAll("Warning: nono not found, running without sandbox. Install: brew install nono\n") catch {};
     }
 
-    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] prompt [extra]
-    var argv_buf: [32][]const u8 = undefined;
+    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] [prompt]
+    var argv_buf: [40][]const u8 = undefined;
     var argc: usize = 0;
 
     if (has_nono) {
@@ -1040,12 +1106,6 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     // The actual AI tool command
     argv_buf[argc] = tool_name;
     argc += 1;
-    for (prompt_flag) |flag| {
-        argv_buf[argc] = flag;
-        argc += 1;
-    }
-    argv_buf[argc] = prompt_arg;
-    argc += 1;
 
     // Pass through extra args (e.g. -c, -p "prompt", --model, etc)
     for (extra_args) |arg| {
@@ -1055,6 +1115,15 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
                 argc += 1;
             }
         }
+    }
+
+    if (prompt_arg) |pa| {
+        for (prompt_flag) |flag| {
+            argv_buf[argc] = flag;
+            argc += 1;
+        }
+        argv_buf[argc] = pa;
+        argc += 1;
     }
     const argv_slice = argv_buf[0..argc];
 
@@ -1073,10 +1142,14 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     defer env.deinit();
     child.env_map = &env;
 
-    // Ensure RTK Bash hook is configured (if rtk is installed)
+    // Ensure RTK hooks are configured where the tool supports them.
     if (findGitRoot(allocator)) |git_root| {
         defer allocator.free(git_root);
-        ensureRtkHook(allocator, git_root) catch {};
+        if (mem.eql(u8, tool_name, "claude")) {
+            ensureClaudeRtkHook(allocator, git_root) catch {};
+        } else if (mem.eql(u8, tool_name, "gemini")) {
+            ensureGeminiRtkHook(allocator, git_root) catch {};
+        }
     } else |_| {}
 
     _ = try child.spawn();
@@ -1084,12 +1157,9 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     process.exit(term.Exited);
 }
 
-/// Inject RTK Bash hook into .claude/settings.json if rtk is installed.
+/// Inject RTK Bash hook into .claude/settings.json.
 /// Idempotent — checks for "rtk-rewrite" before modifying.
-fn ensureRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
-    // 1. Check if rtk binary is in PATH
-    if (!binaryInPath(allocator, "rtk")) return;
-
+fn ensureClaudeRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
     // 2. Ensure ~/.claude/hooks/rtk-rewrite.sh exists
     const home = std.process.getEnvVarOwned(allocator, "HOME") catch return;
     defer allocator.free(home);
@@ -1129,7 +1199,7 @@ fn ensureRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
     const rtk_hook =
         \\{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/rtk-rewrite.sh"}]}
     ;
-    const new_content = try injectPreToolUseHook(allocator, content, rtk_hook);
+    const new_content = try injectNamedHook(allocator, content, "PreToolUse", rtk_hook);
     defer allocator.free(new_content);
 
     if (mem.eql(u8, new_content, content)) return; // no change
@@ -1139,6 +1209,36 @@ fn ensureRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
     try out.writeAll(new_content);
 
     stderr().writeAll("RTK: Added Bash hook to .claude/settings.json\n") catch {};
+}
+
+/// Inject RTK BeforeTool hook into .gemini/settings.json.
+fn ensureGeminiRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
+    const settings_path = try std.fmt.allocPrint(allocator, "{s}/.gemini/settings.json", .{git_root});
+    defer allocator.free(settings_path);
+
+    const f = fs.openFileAbsolute(settings_path, .{}) catch return;
+    const content = f.readToEndAlloc(allocator, 65536) catch {
+        f.close();
+        return;
+    };
+    f.close();
+    defer allocator.free(content);
+
+    if (mem.indexOf(u8, content, "rtk hook gemini") != null) return;
+
+    const rtk_hook =
+        \\{"matcher":"run_shell_command","hooks":[{"type":"command","command":"rtk hook gemini"}]}
+    ;
+    const new_content = try injectNamedHook(allocator, content, "BeforeTool", rtk_hook);
+    defer allocator.free(new_content);
+
+    if (mem.eql(u8, new_content, content)) return;
+
+    const out = try fs.createFileAbsolute(settings_path, .{});
+    defer out.close();
+    try out.writeAll(new_content);
+
+    stderr().writeAll("RTK: Added BeforeTool hook to .gemini/settings.json\n") catch {};
 }
 
 /// Return true if binary name exists in PATH.
@@ -1154,12 +1254,15 @@ fn binaryInPath(allocator: mem.Allocator, name: []const u8) bool {
     return false;
 }
 
-/// Insert hook_entry into the PreToolUse array in JSON content.
-/// If PreToolUse doesn't exist, creates it. Returns new JSON string.
-fn injectPreToolUseHook(allocator: mem.Allocator, content: []const u8, hook_entry: []const u8) ![]const u8 {
-    // Case 1: "PreToolUse" already exists — insert at start of its array
-    if (mem.indexOf(u8, content, "\"PreToolUse\"")) |pre_pos| {
-        var scan = pre_pos + "\"PreToolUse\"".len;
+/// Insert hook_entry into the named hook array in JSON content.
+/// If the hook event doesn't exist, creates it. Returns new JSON string.
+fn injectNamedHook(allocator: mem.Allocator, content: []const u8, event_name: []const u8, hook_entry: []const u8) ![]const u8 {
+    const quoted_event = try std.fmt.allocPrint(allocator, "\"{s}\"", .{event_name});
+    defer allocator.free(quoted_event);
+
+    // Case 1: hook event already exists — insert at start of its array
+    if (mem.indexOf(u8, content, quoted_event)) |pre_pos| {
+        var scan = pre_pos + quoted_event.len;
         while (scan < content.len and content[scan] != '[') : (scan += 1) {}
         if (scan < content.len) {
             const insert_pos = scan + 1;
@@ -1169,13 +1272,13 @@ fn injectPreToolUseHook(allocator: mem.Allocator, content: []const u8, hook_entr
         }
     }
 
-    // Case 2: No PreToolUse — add it after "hooks": {
+    // Case 2: No such hook event — add it after "hooks": {
     if (mem.indexOf(u8, content, "\"hooks\"")) |hooks_pos| {
         var scan = hooks_pos + "\"hooks\"".len;
         while (scan < content.len and content[scan] != '{') : (scan += 1) {}
         if (scan < content.len) {
             const insert_pos = scan + 1;
-            const entry = try std.fmt.allocPrint(allocator, "\"PreToolUse\":[{s}],", .{hook_entry});
+            const entry = try std.fmt.allocPrint(allocator, "\"{s}\":[{s}],", .{ event_name, hook_entry });
             defer allocator.free(entry);
             return try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
                 content[0..insert_pos], entry, content[insert_pos..],

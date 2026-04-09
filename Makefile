@@ -15,10 +15,11 @@ build-cli-release:
 build-server:
 	cd server && MIX_ENV=prod mix release explicit_server --overwrite
 
-# Build debug wrapper (copy + re-sign CLI binary to debug/)
-debug: build-cli
+# Build debug wrapper and server release into debug/
+debug: build-cli build-server
 	mkdir -p debug
 	cp cli/explicit debug/explicit
+	cp server/_build/prod/rel/explicit_server/bin/explicit_server debug/explicit-server
 	codesign --sign - --force debug/explicit
 
 # Dev mode: start server via mix (no release needed)

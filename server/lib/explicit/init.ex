@@ -105,7 +105,7 @@ defmodule Explicit.Init do
   defp create_docs(dir, name) do
     write_if_missing(dir, "README.md", docs_readme(name)) ++
     write_if_missing(dir, "CLAUDE.md", "@AGENTS.md\n") ++
-    write_if_missing(dir, "GEMINI.md", "@AGENTS.md\n") ++
+    write_if_missing(dir, "GEMINI.md", Explicit.SystemPrompt.gemini_md()) ++
     write_if_missing(dir, ".agents/AGENTS.md", "@../AGENTS.md\n") ++
     write_if_missing(dir, "AGENTS.md", agents_md(name))
   end
@@ -338,6 +338,14 @@ defmodule Explicit.Init do
     Jason.encode!(%{
       "context" => %{"fileName" => ["AGENTS.md", "GEMINI.md"]},
       "hooks" => %{
+        "BeforeTool" => [
+          %{
+            "matcher" => "run_shell_command",
+            "hooks" => [
+              %{"type" => "command", "command" => "rtk hook gemini"}
+            ]
+          }
+        ],
         "AfterTool" => [
           %{
             "matcher" => "write_file|replace",
@@ -1009,6 +1017,12 @@ defmodule Explicit.Init do
     - `docs/` — Decision documents (ADR, OPP, SPEC, INC)
     - Use `explicit docs new <type> "Title"` to create documents
     - Reference doc IDs (OPP-001, ADR-001) in code via `@moduledoc`
+
+    ## RTK
+
+    - Every shell command must be prefixed with `rtk`
+    - Use direct wrappers when available: `rtk ls`, `rtk git status`, `rtk pytest`
+    - Otherwise use `rtk proxy ...`, for example `rtk proxy ssh user@host`
 
     ## Testing
 
