@@ -19,15 +19,15 @@ defmodule Eval.Workspace do
     if code != 0, do: Logger.warning("explicit init exit #{code}: #{output}")
 
     # Create docs directories (explicit init <name> creates these but let's be safe)
-    for dir <- ~w(docs docs/architecture docs/opportunities docs/specs .explicit .claude) do
+    for dir <- ~w(docs docs/architecture docs/opportunities docs/specs .explicit .claude .codex) do
       File.mkdir_p!(Path.join(project_dir, dir))
     end
 
     # Write CLAUDE.md teaching Claude the workflow
     write_claude_md(project_dir, name)
 
-    # Write .claude/settings.json with stop hook
-    write_claude_settings(project_dir)
+    # Write Claude and Codex hook config
+    write_agent_settings(project_dir)
 
     # Write schema for doc validation
     write_schema(project_dir)
@@ -80,8 +80,8 @@ defmodule Eval.Workspace do
     File.write!(Path.join(dir, "CLAUDE.md"), content)
   end
 
-  defp write_claude_settings(dir) do
-    settings = Jason.encode!(%{
+  defp write_agent_settings(dir) do
+    claude_settings = Jason.encode!(%{
       "hooks" => %{
         "Stop" => [%{
           "hooks" => [%{
@@ -92,8 +92,30 @@ defmodule Eval.Workspace do
       }
     }, pretty: true)
 
+    codex_hooks = Jason.encode!(%{
+      "hooks" => %{
+        "PostToolUse" => [%{
+          "matcher" => "Bash",
+          "hooks" => [
+            %{"type" => "command", "command" => "explicit hooks codex check-fixme"},
+            %{"type" => "command", "command" => "explicit hooks codex check-code"}
+          ]
+        }],
+        "Stop" => [%{
+          "hooks" => [%{
+            "type" => "command",
+            "command" => "explicit hooks codex stop",
+            "timeout" => 30
+          }]
+        }]
+      }
+    }, pretty: true)
+
     File.mkdir_p!(Path.join(dir, ".claude"))
-    File.write!(Path.join(dir, ".claude/settings.json"), settings <> "\n")
+    File.mkdir_p!(Path.join(dir, ".codex"))
+    File.write!(Path.join(dir, ".claude/settings.json"), claude_settings <> "\n")
+    File.write!(Path.join(dir, ".codex/hooks.json"), codex_hooks <> "\n")
+    File.write!(Path.join(dir, ".codex/config.toml"), "[features]\ncodex_hooks = true\n")
   end
 
   defp write_schema(dir) do

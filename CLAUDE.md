@@ -76,6 +76,14 @@ Or manually add to `.claude/settings.json`:
 
 The stop hook blocks Claude when violations are found, forcing it to fix them.
 
+## Codex Integration
+
+`explicit init` also creates repo-local Codex hook config in `.codex/hooks.json` and enables hooks in `.codex/config.toml`.
+
+Run `codex` from the repo root and Codex will pick up those hook files automatically.
+
+Codex hook reference: <https://developers.openai.com/codex/hooks>
+
 ## Building
 
 ```bash

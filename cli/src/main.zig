@@ -78,7 +78,7 @@ pub fn main() !void {
         try cmdLaunchAI(allocator, "claude", &.{ "--dangerously-skip-permissions", "--append-system-prompt-file" }, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "gemini")) {
-        try cmdLaunchAI(allocator, "gemini", &.{"--yolo", "-i"}, positional[0..pos_count], no_sandbox);
+        try cmdLaunchAI(allocator, "gemini", &.{ "--yolo", "-i" }, positional[0..pos_count], no_sandbox);
         return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
         // init <name>: create project dir + git init, then start server there
@@ -348,20 +348,20 @@ fn envWithSelfInPath(allocator: mem.Allocator) !std.process.EnvMap {
 
 fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const u8) !void {
     const p = provider orelse {
-        stderr().writeAll("Usage: explicit hooks claude <stop|check-fixme|check-code>\n") catch {};
+        stderr().writeAll("Usage: explicit hooks <claude|codex> <stop|check-fixme|check-code>\n") catch {};
         process.exit(1);
     };
-    if (!mem.eql(u8, p, "claude")) {
+    if (!mem.eql(u8, p, "claude") and !mem.eql(u8, p, "codex")) {
         stderr().print("Unknown hook provider: {s}\n", .{p}) catch {};
         process.exit(1);
     }
     const h = hook_name orelse {
-        stderr().writeAll("Usage: explicit hooks claude <stop|check-fixme|check-code>\n") catch {};
+        stderr().writeAll("Usage: explicit hooks <claude|codex> <stop|check-fixme|check-code>\n") catch {};
         process.exit(1);
     };
 
     if (mem.eql(u8, h, "stop")) {
-        hookClaudeStop(allocator) catch |err| {
+        hookStop(allocator, p) catch |err| {
             stderr().print("[FAIL] Stop hook crashed: {s}\n", .{@errorName(err)}) catch {};
             process.exit(2);
         };
@@ -377,7 +377,7 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
 }
 
 /// Stop hook: quality gate + auto-format + compile warnings
-fn hookClaudeStop(allocator: mem.Allocator) !void {
+fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
     const git_root = findGitRoot(allocator) catch {
         stderr().writeAll("No git root found, skipping checks.\n") catch {};
         process.exit(0);
@@ -508,7 +508,7 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
         // If we got here via a check that failed without writing anything
         // (e.g. a bug in one of the blocks above), make sure Claude sees
         // SOMETHING actionable rather than an empty "No stderr output" box.
-        stderr().writeAll("explicit hooks claude stop: issues found (exit 2). Run `explicit quality --json` + `mix test` to see details.\n") catch {};
+        stderr().print("explicit hooks {s} stop: issues found (exit 2). Run `explicit quality --json` + `mix test` to see details.\n", .{provider}) catch {};
         process.exit(2);
     }
     stderr().writeAll("All checks passed.\n") catch {};
@@ -517,7 +517,9 @@ fn hookClaudeStop(allocator: mem.Allocator) !void {
 
 /// Check quality and output concise summary to stderr. Returns true if issues found.
 fn checkQuality(allocator: mem.Allocator, sock_path: []const u8) !bool {
-    var stream = net.connectUnixSocket(sock_path) catch { return false; };
+    var stream = net.connectUnixSocket(sock_path) catch {
+        return false;
+    };
     defer stream.close();
 
     // Set 30s read timeout for quality check
@@ -545,9 +547,19 @@ fn checkQuality(allocator: mem.Allocator, sock_path: []const u8) !bool {
 
     err.writeAll("Quality issues: ") catch {};
     var sep: bool = false;
-    if (iron > 0) { err.print("{d} code violations", .{iron}) catch {}; sep = true; }
-    if (docs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} missing @doc", .{docs}) catch {}; sep = true; }
-    if (doc_errs > 0) { if (sep) err.writeAll(", ") catch {}; err.print("{d} doc errors", .{doc_errs}) catch {}; }
+    if (iron > 0) {
+        err.print("{d} code violations", .{iron}) catch {};
+        sep = true;
+    }
+    if (docs > 0) {
+        if (sep) err.writeAll(", ") catch {};
+        err.print("{d} missing @doc", .{docs}) catch {};
+        sep = true;
+    }
+    if (doc_errs > 0) {
+        if (sep) err.writeAll(", ") catch {};
+        err.print("{d} doc errors", .{doc_errs}) catch {};
+    }
     err.writeAll("\n") catch {};
 
     // Walk the `files` array from the quality response. Each entry is either:
@@ -654,15 +666,21 @@ fn checkMethod(allocator: mem.Allocator, sock_path: []const u8, request: []const
 
 /// Send a method to server, output to stderr if non-empty result, exit 0 (advisory)
 fn hookSendQuiet(allocator: mem.Allocator, request: []const u8) !void {
-    const git_root = findGitRoot(allocator) catch { process.exit(0); };
+    const git_root = findGitRoot(allocator) catch {
+        process.exit(0);
+    };
     defer allocator.free(git_root);
     const sock_path = try socketPathForDir(allocator, git_root);
     defer allocator.free(sock_path);
 
-    var stream = net.connectUnixSocket(sock_path) catch { process.exit(0); };
+    var stream = net.connectUnixSocket(sock_path) catch {
+        process.exit(0);
+    };
     defer stream.close();
 
-    const response = sendRequest(allocator, stream, request) catch { process.exit(0); };
+    const response = sendRequest(allocator, stream, request) catch {
+        process.exit(0);
+    };
     defer allocator.free(response);
     if (mem.indexOf(u8, response, "\"total\":0") == null) {
         stderr().writeAll(response) catch {};
@@ -883,16 +901,27 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
             // Build: devenv shell -- /path/to/explicit claude [extra_args...]
             var reexec_buf: [24][]const u8 = undefined;
             var rc: usize = 0;
-            reexec_buf[rc] = "devenv"; rc += 1;
-            reexec_buf[rc] = "shell"; rc += 1;
-            reexec_buf[rc] = "--"; rc += 1;
-            reexec_buf[rc] = self_path; rc += 1;
-            reexec_buf[rc] = tool_name; rc += 1;
-            if (no_sandbox) { reexec_buf[rc] = "--no-sandbox"; rc += 1; }
+            reexec_buf[rc] = "devenv";
+            rc += 1;
+            reexec_buf[rc] = "shell";
+            rc += 1;
+            reexec_buf[rc] = "--";
+            rc += 1;
+            reexec_buf[rc] = self_path;
+            rc += 1;
+            reexec_buf[rc] = tool_name;
+            rc += 1;
+            if (no_sandbox) {
+                reexec_buf[rc] = "--no-sandbox";
+                rc += 1;
+            }
             // Pass through extra args
             for (extra_args) |ea| {
                 if (ea) |a| {
-                    if (rc < reexec_buf.len) { reexec_buf[rc] = a; rc += 1; }
+                    if (rc < reexec_buf.len) {
+                        reexec_buf[rc] = a;
+                        rc += 1;
+                    }
                 }
             }
 
@@ -950,29 +979,43 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_flag: []c
     var argc: usize = 0;
 
     if (has_nono) {
-        argv_buf[argc] = "nono"; argc += 1;
-        argv_buf[argc] = "wrap"; argc += 1;
-        argv_buf[argc] = "--profile"; argc += 1;
-        argv_buf[argc] = "claude-code"; argc += 1;
+        argv_buf[argc] = "nono";
+        argc += 1;
+        argv_buf[argc] = "wrap";
+        argc += 1;
+        argv_buf[argc] = "--profile";
+        argc += 1;
+        argv_buf[argc] = "claude-code";
+        argc += 1;
         // Expand $HOME for paths nono needs
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
         const mix_home = try std.fmt.allocPrint(allocator, "{s}/.mix", .{home});
         const mcp_json = try std.fmt.allocPrint(allocator, "{s}/.mcp.json", .{home});
-        argv_buf[argc] = "--allow"; argc += 1;
-        argv_buf[argc] = mix_home; argc += 1;
-        argv_buf[argc] = "--allow-file"; argc += 1;
-        argv_buf[argc] = mcp_json; argc += 1;
-        argv_buf[argc] = "--allow"; argc += 1;
-        argv_buf[argc] = "."; argc += 1;
-        argv_buf[argc] = "--"; argc += 1;
+        argv_buf[argc] = "--allow";
+        argc += 1;
+        argv_buf[argc] = mix_home;
+        argc += 1;
+        argv_buf[argc] = "--allow-file";
+        argc += 1;
+        argv_buf[argc] = mcp_json;
+        argc += 1;
+        argv_buf[argc] = "--allow";
+        argc += 1;
+        argv_buf[argc] = ".";
+        argc += 1;
+        argv_buf[argc] = "--";
+        argc += 1;
     }
 
     // The actual AI tool command
-    argv_buf[argc] = tool_name; argc += 1;
+    argv_buf[argc] = tool_name;
+    argc += 1;
     for (prompt_flag) |flag| {
-        argv_buf[argc] = flag; argc += 1;
+        argv_buf[argc] = flag;
+        argc += 1;
     }
-    argv_buf[argc] = prompt_arg; argc += 1;
+    argv_buf[argc] = prompt_arg;
+    argc += 1;
 
     // Pass through extra args (e.g. -c, -p "prompt", --model, etc)
     for (extra_args) |arg| {
@@ -1042,7 +1085,10 @@ fn ensureRtkHook(allocator: mem.Allocator, git_root: []const u8) !void {
     defer allocator.free(settings_path);
 
     const f = fs.openFileAbsolute(settings_path, .{}) catch return;
-    const content = f.readToEndAlloc(allocator, 65536) catch { f.close(); return; };
+    const content = f.readToEndAlloc(allocator, 65536) catch {
+        f.close();
+        return;
+    };
     f.close();
     defer allocator.free(content);
 
@@ -1161,9 +1207,18 @@ fn findDevenvDir(allocator: mem.Allocator) ?[]const u8 {
         allocator.free(devenv_path);
         if (found) return dir;
 
-        const parent = std.fs.path.dirname(dir) orelse { allocator.free(dir); return null; };
-        if (mem.eql(u8, parent, dir)) { allocator.free(dir); return null; }
-        const parent_owned = allocator.dupe(u8, parent) catch { allocator.free(dir); return null; };
+        const parent = std.fs.path.dirname(dir) orelse {
+            allocator.free(dir);
+            return null;
+        };
+        if (mem.eql(u8, parent, dir)) {
+            allocator.free(dir);
+            return null;
+        }
+        const parent_owned = allocator.dupe(u8, parent) catch {
+            allocator.free(dir);
+            return null;
+        };
         allocator.free(dir);
         dir = parent_owned;
     }

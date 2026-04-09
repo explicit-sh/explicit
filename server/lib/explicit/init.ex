@@ -1,7 +1,7 @@
 defmodule Explicit.Init do
   @moduledoc """
   Initialize explicit in an existing project.
-  Creates .explicit/, .claude/, docs/ structure with schema, hooks, and skills.
+  Creates .explicit/, .claude/, .codex/, docs/ structure with schema, hooks, and skills.
   """
 
   require Logger
@@ -64,6 +64,8 @@ defmodule Explicit.Init do
       .claude/skills/opportunity .claude/skills/incident .claude/skills/spec
       .claude/skills/test .claude/skills/elixir-quality .claude/skills/phoenix-patterns
       .vscode
+      .agents
+      .codex
       infra
       services
     )
@@ -84,6 +86,8 @@ defmodule Explicit.Init do
 
   defp create_claude_config(dir, name) do
     write_if_missing(dir, ".claude/settings.json", claude_settings()) ++
+    write_if_missing(dir, ".codex/hooks.json", codex_hooks()) ++
+    write_if_missing(dir, ".codex/config.toml", codex_config_toml()) ++
     write_if_missing(dir, ".claude/skills/adr/skill.md", skill_adr()) ++
     write_if_missing(dir, ".claude/skills/opportunity/skill.md", skill_opp()) ++
     write_if_missing(dir, ".claude/skills/incident/skill.md", skill_inc()) ++
@@ -96,6 +100,7 @@ defmodule Explicit.Init do
   defp create_docs(dir, name) do
     write_if_missing(dir, "README.md", docs_readme(name)) ++
     write_if_missing(dir, "CLAUDE.md", "@AGENTS.md\n") ++
+    write_if_missing(dir, ".agents/AGENTS.md", "@../AGENTS.md\n") ++
     write_if_missing(dir, "AGENTS.md", agents_md(name))
   end
 
@@ -297,6 +302,30 @@ defmodule Explicit.Init do
         }]
       }
     }, pretty: true) <> "\n"
+  end
+
+  defp codex_hooks do
+    Jason.encode!(%{
+      "hooks" => %{
+        "PostToolUse" => [%{
+          "matcher" => "Bash",
+          "hooks" => [
+            %{"type" => "command", "command" => "explicit hooks codex check-fixme"},
+            %{"type" => "command", "command" => "explicit hooks codex check-code"}
+          ]
+        }],
+        "Stop" => [%{
+          "hooks" => [%{"type" => "command", "command" => "explicit hooks codex stop", "timeout" => 30}]
+        }]
+      }
+    }, pretty: true) <> "\n"
+  end
+
+  defp codex_config_toml do
+    """
+    [features]
+    codex_hooks = true
+    """
   end
 
   defp skill_adr do
