@@ -1239,7 +1239,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
         stderr().writeAll("Warning: nono not found, running without sandbox. Install: brew install nono\n") catch {};
     }
 
-    // Build argv: [nono wrap --profile claude-code --allow . --] tool [flags] [prompt]
+    // Build argv: [nono wrap --profile <tool> --allow . --] tool [flags] [prompt]
     var argv_buf: [40][]const u8 = undefined;
     var argc: usize = 0;
 
@@ -1250,12 +1250,13 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
         argc += 1;
         argv_buf[argc] = "--profile";
         argc += 1;
-        argv_buf[argc] = "claude-code";
+        argv_buf[argc] = nonoProfileForTool(tool_name);
         argc += 1;
         // Expand $HOME for paths nono needs
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
         const mix_home = try std.fmt.allocPrint(allocator, "{s}/.mix", .{home});
         const mcp_json = try std.fmt.allocPrint(allocator, "{s}/.mcp.json", .{home});
+        const shell_profile = try std.fmt.allocPrint(allocator, "{s}/.profile", .{home});
         argv_buf[argc] = "--allow";
         argc += 1;
         argv_buf[argc] = mix_home;
@@ -1264,6 +1265,16 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
         argc += 1;
         argv_buf[argc] = mcp_json;
         argc += 1;
+        if (fs.accessAbsolute(shell_profile, .{})) |_| {
+            argv_buf[argc] = "--override-deny";
+            argc += 1;
+            argv_buf[argc] = shell_profile;
+            argc += 1;
+            argv_buf[argc] = "--read-file";
+            argc += 1;
+            argv_buf[argc] = shell_profile;
+            argc += 1;
+        } else |_| {}
         argv_buf[argc] = "--allow";
         argc += 1;
         argv_buf[argc] = ".";
@@ -1324,6 +1335,12 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
     _ = try child.spawn();
     const term = try child.wait();
     process.exit(term.Exited);
+}
+
+fn nonoProfileForTool(tool_name: []const u8) []const u8 {
+    if (mem.eql(u8, tool_name, "codex")) return "codex";
+    if (mem.eql(u8, tool_name, "opencode")) return "opencode";
+    return "claude-code";
 }
 
 /// Inject RTK Bash hook into .claude/settings.json.
