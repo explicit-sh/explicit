@@ -30,3 +30,15 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 examples/
+
+# Root docs scratch files
+/*.md
+!/README.md
+!/AGENTS.md
+!/CLAUDE.md
+!/CONTRIBUTING.md
+!/CHANGELOG.md
+!/SECURITY.md
+!/CODE_OF_CONDUCT.md
+!/SUPPORT.md
+!/CLAUDE-WORKAROUNDS.md
