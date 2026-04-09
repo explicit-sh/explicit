@@ -3,6 +3,11 @@
 ZIG ?= zig
 # macOS 26 (Tahoe) is too new for Zig's linker — target macOS 15 for compat
 ZIG_TARGET ?= aarch64-macos.15.0-none
+INCLUDE_ERTS ?= true
+
+ifneq ($(strip $(IN_NIX_SHELL)$(DEVENV_ROOT)),)
+INCLUDE_ERTS := false
+endif
 
 build-cli:
 	cd cli && $(ZIG) build-exe src/main.zig -target $(ZIG_TARGET) -ODebug
@@ -13,7 +18,7 @@ build-cli-release:
 	mv cli/main cli/explicit
 
 build-server:
-	cd server && MIX_ENV=prod mix release explicit_server --overwrite
+	cd server && MIX_ENV=prod INCLUDE_ERTS=$(INCLUDE_ERTS) mix release explicit_server --overwrite
 
 # Build debug wrapper and server release into debug/
 debug: build-cli build-server

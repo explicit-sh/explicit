@@ -114,9 +114,21 @@ pub fn main() !void {
         }
         try cmdLaunchAI(allocator, "opencode", .none, &.{}, positional[0..pos_count], no_sandbox);
         return;
+    } else if (mem.eql(u8, command, "init") and p0 != null and (mem.eql(u8, p0.?, "--help") or mem.eql(u8, p0.?, "-h"))) {
+        stderr().writeAll(
+            \\explicit init — Initialize explicit in a project
+            \\
+            \\Usage:
+            \\  explicit init            Initialize explicit in the current project
+            \\  explicit init <name>     Create a new project directory, then initialize it
+            \\
+        ) catch {};
+        return;
     } else if (mem.eql(u8, command, "init") and p0 != null) {
-        // init <name>: create project dir + git init, then start server there
         try cmdInitNew(allocator, p0.?);
+        return;
+    } else if (mem.eql(u8, command, "init")) {
+        try cmdInitHere(allocator);
         return;
     } else if (mem.eql(u8, command, "help") or mem.eql(u8, command, "--help") or mem.eql(u8, command, "-h")) {
         printUsage();
@@ -761,23 +773,31 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
     const project_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ cwd, name });
     defer allocator.free(project_dir);
 
-    // Create project directory
-    fs.makeDirAbsolute(project_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {
-            stderr().print("Error: Directory {s} already exists.\n", .{name}) catch {};
-            process.exit(1);
+    var project_exists = true;
+    fs.accessAbsolute(project_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            project_exists = false;
+            fs.makeDirAbsolute(project_dir) catch {
+                stderr().print("Error: Cannot create directory {s}\n", .{name}) catch {};
+                process.exit(1);
+            };
         },
         else => {
-            stderr().print("Error: Cannot create directory {s}\n", .{name}) catch {};
+            stderr().print("Error: Cannot access directory {s}\n", .{name}) catch {};
             process.exit(1);
         },
     };
+
+    const overwrites = try collectInitOverwrites(allocator, project_dir);
+    defer freeOwnedStrings(allocator, overwrites);
 
     stderr().print("Creating {s}...\n", .{name}) catch {};
 
     // git init + devenv init (creates devenv.yaml + bootstrap files)
     runIn(allocator, project_dir, &.{ "git", "init" });
-    runIn(allocator, project_dir, &.{ "devenv", "init" });
+    if (!project_exists or !fileExistsAbsolute(allocator, project_dir, "devenv.yaml")) {
+        runIn(allocator, project_dir, &.{ "devenv", "init" });
+    }
 
     // Start server for the new project and run init (schema, hooks, skills)
     const server_bin = findServerBinary(allocator) catch null;
@@ -812,7 +832,9 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
             std.Thread.sleep(200 * std.time.ns_per_ms);
             if (net.connectUnixSocket(new_sock)) |stream| {
                 // Send init command
-                if (sendRequest(allocator, stream, "{\"method\":\"init\"}")) |response| {
+                const req = try buildInitRequestWithOverwrites(allocator, project_dir, null, overwrites);
+                defer allocator.free(req);
+                if (sendRequest(allocator, stream, req)) |response| {
                     defer allocator.free(response);
                     try printHuman(response);
                 } else |_| {}
@@ -842,6 +864,153 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
             .{ name, name },
         ) catch {};
     }
+}
+
+fn cmdInitHere(allocator: mem.Allocator) !void {
+    var cwd_buf: [fs.max_path_bytes]u8 = undefined;
+    const cwd = std.process.getCwd(&cwd_buf) catch {
+        stderr().writeAll("Error: Cannot get current directory\n") catch {};
+        process.exit(1);
+    };
+
+    const overwrites = try collectInitOverwrites(allocator, cwd);
+    defer freeOwnedStrings(allocator, overwrites);
+
+    var stream = try connectToSocket(allocator);
+    defer stream.close();
+
+    const req = try buildInitRequestWithOverwrites(allocator, cwd, null, overwrites);
+    defer allocator.free(req);
+
+    const response = sendRequest(allocator, stream, req) catch |err| {
+        stderr().print("Error: server communication failed: {s}\n", .{@errorName(err)}) catch {};
+        process.exit(1);
+    };
+    defer allocator.free(response);
+
+    try printHuman(response);
+}
+
+fn collectInitOverwrites(allocator: mem.Allocator, project_dir: []const u8) ![][]const u8 {
+    const managed = [_][]const u8{
+        ".explicit/org.kdl",
+        ".claude/settings.json",
+        ".codex/hooks.json",
+        ".codex/config.toml",
+        ".gemini/settings.json",
+        "opencode.json",
+        ".opencode/plugins/explicit.js",
+        ".claude/skills/adr/skill.md",
+        ".claude/skills/opportunity/skill.md",
+        ".claude/skills/incident/skill.md",
+        ".claude/skills/spec/skill.md",
+        ".claude/skills/test/skill.md",
+        ".claude/skills/elixir-quality/skill.md",
+        ".claude/skills/phoenix-patterns/skill.md",
+        "README.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        ".agents/AGENTS.md",
+        "AGENTS.md",
+        ".lsp.json",
+        "devenv.nix",
+        "devenv.yaml",
+        "infra/main.tf",
+        "infra/.gitignore",
+        ".vscode/extensions.json",
+        ".vscode/settings.json",
+    };
+
+    var chosen = std.ArrayList([]const u8){};
+    defer chosen.deinit(allocator);
+    var overwrite_all = false;
+
+    for (managed) |rel_path| {
+        if (!fileExistsAbsolute(allocator, project_dir, rel_path)) continue;
+
+        if (overwrite_all) {
+            try chosen.append(allocator, try allocator.dupe(u8, rel_path));
+            continue;
+        }
+
+        while (true) {
+            stderr().print("Overwrite existing {s}? [y/N/a/q] ", .{rel_path}) catch {};
+            const answer = try readPromptReply();
+
+            if (answer == 'y' or answer == 'Y') {
+                try chosen.append(allocator, try allocator.dupe(u8, rel_path));
+                break;
+            }
+            if (answer == 'a' or answer == 'A') {
+                overwrite_all = true;
+                try chosen.append(allocator, try allocator.dupe(u8, rel_path));
+                break;
+            }
+            if (answer == 'q' or answer == 'Q') process.exit(1);
+            if (answer == 'n' or answer == 'N' or answer == '\n' or answer == '\r' or answer == 0) break;
+        }
+    }
+
+    return chosen.toOwnedSlice(allocator);
+}
+
+fn readPromptReply() !u8 {
+    const stdin_file = std.fs.File.stdin();
+    var one: [1]u8 = undefined;
+    const first_len = stdin_file.read(&one) catch return 0;
+    if (first_len == 0) return 0;
+    const first = one[0];
+
+    if (first != '\n' and first != '\r') {
+        while (true) {
+            const next_len = stdin_file.read(&one) catch break;
+            if (next_len == 0 or one[0] == '\n') break;
+        }
+    }
+
+    return first;
+}
+
+fn fileExistsAbsolute(allocator: mem.Allocator, base_dir: []const u8, rel_path: []const u8) bool {
+    const full = std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_dir, rel_path }) catch return false;
+    defer allocator.free(full);
+    fs.accessAbsolute(full, .{}) catch return false;
+    return true;
+}
+
+fn freeOwnedStrings(allocator: mem.Allocator, items: [][]const u8) void {
+    for (items) |item| allocator.free(item);
+    allocator.free(items);
+}
+
+fn buildInitRequestWithOverwrites(allocator: mem.Allocator, dir: []const u8, name: ?[]const u8, overwrite_paths: [][]const u8) ![]const u8 {
+    const dir_escaped = try escapeJsonString(allocator, dir);
+    defer allocator.free(dir_escaped);
+
+    var overwrite_json = std.ArrayList(u8){};
+    defer overwrite_json.deinit(allocator);
+    try overwrite_json.append(allocator, '[');
+    for (overwrite_paths, 0..) |path, idx| {
+        if (idx > 0) try overwrite_json.append(allocator, ',');
+        const escaped = try escapeJsonString(allocator, path);
+        defer allocator.free(escaped);
+        try overwrite_json.writer(allocator).print("\"{s}\"", .{escaped});
+    }
+    try overwrite_json.append(allocator, ']');
+
+    if (name) |n| {
+        const name_escaped = try escapeJsonString(allocator, n);
+        defer allocator.free(name_escaped);
+        return try std.fmt.allocPrint(allocator, "{{\"method\":\"init\",\"params\":{{\"name\":\"{s}\",\"dir\":\"{s}\",\"overwrite_paths\":{s}}}}}\n", .{ name_escaped, dir_escaped, overwrite_json.items });
+    }
+
+    return try std.fmt.allocPrint(allocator, "{{\"method\":\"init\",\"params\":{{\"dir\":\"{s}\",\"overwrite_paths\":{s}}}}}\n", .{ dir_escaped, overwrite_json.items });
+}
+
+fn escapeJsonString(allocator: mem.Allocator, value: []const u8) ![]const u8 {
+    const bs = try std.mem.replaceOwned(u8, allocator, value, "\\", "\\\\");
+    defer allocator.free(bs);
+    return try std.mem.replaceOwned(u8, allocator, bs, "\"", "\\\"");
 }
 
 fn runIn(allocator: mem.Allocator, dir: []const u8, argv: []const []const u8) void {

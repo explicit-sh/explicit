@@ -277,7 +277,8 @@ defmodule Explicit.ConnectionHandler do
   defp handle_method("init", %{"name" => name} = params) do
     base_dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
     dir = Path.join(base_dir, name)
-    case Explicit.Init.run_new(dir, name) do
+    overwrite_paths = Map.get(params, "overwrite_paths", [])
+    case Explicit.Init.run_new(dir, name, overwrite_paths) do
       {:ok, result} ->
         Protocol.encode_ok(%{
           project: result.project,
@@ -291,7 +292,8 @@ defmodule Explicit.ConnectionHandler do
 
   defp handle_method("init", params) do
     dir = Map.get(params, "dir") || Application.get_env(:explicit, :project_dir, ".")
-    case Explicit.Init.run(dir) do
+    overwrite_paths = Map.get(params, "overwrite_paths", [])
+    case Explicit.Init.run(dir, overwrite_paths) do
       {:ok, result} ->
         Protocol.encode_ok(%{
           project: result.project,

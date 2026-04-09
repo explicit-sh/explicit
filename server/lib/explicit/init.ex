@@ -7,8 +7,9 @@ defmodule Explicit.Init do
   require Logger
 
   @doc "Create a new project directory, git init it, then initialize explicit"
-  def run_new(project_dir, name) do
+  def run_new(project_dir, name, overwrite_paths \\ []) do
     project_dir = Path.expand(project_dir)
+    overwrite_paths = MapSet.new(overwrite_paths)
     File.mkdir_p!(project_dir)
 
     # git init
@@ -20,22 +21,23 @@ defmodule Explicit.Init do
 
     created =
       create_dirs(project_dir) ++
-      create_explicit_config(project_dir, name) ++
-      create_claude_config(project_dir, name) ++
-      create_docs(project_dir, name) ++
-      create_lsp_config(project_dir) ++
-      create_devenv(project_dir, name) ++
-      create_vscode_config(project_dir) ++
-      create_infra(project_dir) ++
+      create_explicit_config(project_dir, name, overwrite_paths) ++
+      create_claude_config(project_dir, name, overwrite_paths) ++
+      create_docs(project_dir, name, overwrite_paths) ++
+      create_lsp_config(project_dir, overwrite_paths) ++
+      create_devenv(project_dir, name, overwrite_paths) ++
+      create_vscode_config(project_dir, overwrite_paths) ++
+      create_infra(project_dir, overwrite_paths) ++
       phoenix_files
 
     {:ok, %{project: project_dir, name: name, created: created}}
   end
 
   @doc "Initialize explicit in the given directory"
-  def run(project_dir) do
+  def run(project_dir, overwrite_paths \\ []) do
     project_dir = Path.expand(project_dir)
     name = Path.basename(project_dir)
+    overwrite_paths = MapSet.new(overwrite_paths)
 
     Logger.info("Initializing explicit in #{project_dir}")
 
@@ -44,13 +46,13 @@ defmodule Explicit.Init do
 
     created =
       create_dirs(project_dir) ++
-      create_explicit_config(project_dir, name) ++
-      create_claude_config(project_dir, name) ++
-      create_docs(project_dir, name) ++
-      create_lsp_config(project_dir) ++
-      create_devenv(project_dir, name) ++
-      create_vscode_config(project_dir) ++
-      create_infra(project_dir) ++
+      create_explicit_config(project_dir, name, overwrite_paths) ++
+      create_claude_config(project_dir, name, overwrite_paths) ++
+      create_docs(project_dir, name, overwrite_paths) ++
+      create_lsp_config(project_dir, overwrite_paths) ++
+      create_devenv(project_dir, name, overwrite_paths) ++
+      create_vscode_config(project_dir, overwrite_paths) ++
+      create_infra(project_dir, overwrite_paths) ++
       phoenix_files
 
     {:ok, %{project: project_dir, name: name, created: created}}
@@ -80,45 +82,43 @@ defmodule Explicit.Init do
     []
   end
 
-  defp create_explicit_config(dir, name) do
+  defp create_explicit_config(dir, name, overwrite_paths) do
     # schema.kdl is NOT created — the server uses the built-in default from priv/
     # Users can create .explicit/schema.kdl to override if needed
-    write_if_missing(dir, ".explicit/org.kdl", org_kdl(name))
+    write_file(dir, ".explicit/org.kdl", org_kdl(name), overwrite_paths)
   end
 
-  defp create_claude_config(dir, name) do
-    write_if_missing(dir, ".claude/settings.json", claude_settings()) ++
-    write_if_missing(dir, ".codex/hooks.json", codex_hooks()) ++
-    write_if_missing(dir, ".codex/config.toml", codex_config_toml()) ++
-    write_if_missing(dir, ".gemini/settings.json", gemini_settings()) ++
-    write_if_missing(dir, "opencode.json", opencode_config_json()) ++
-    write_if_missing(dir, ".opencode/plugins/explicit.js", opencode_plugin_js()) ++
-    write_if_missing(dir, ".claude/skills/adr/skill.md", skill_adr()) ++
-    write_if_missing(dir, ".claude/skills/opportunity/skill.md", skill_opp()) ++
-    write_if_missing(dir, ".claude/skills/incident/skill.md", skill_inc()) ++
-    write_if_missing(dir, ".claude/skills/spec/skill.md", skill_spec(name)) ++
-    write_if_missing(dir, ".claude/skills/test/skill.md", skill_test()) ++
-    write_if_missing(dir, ".claude/skills/elixir-quality/skill.md", skill_elixir_quality()) ++
-    write_if_missing(dir, ".claude/skills/phoenix-patterns/skill.md", skill_phoenix_patterns())
+  defp create_claude_config(dir, name, overwrite_paths) do
+    write_file(dir, ".claude/settings.json", claude_settings(), overwrite_paths) ++
+    write_file(dir, ".codex/hooks.json", codex_hooks(), overwrite_paths) ++
+    write_file(dir, ".codex/config.toml", codex_config_toml(), overwrite_paths) ++
+    write_file(dir, ".gemini/settings.json", gemini_settings(), overwrite_paths) ++
+    write_file(dir, "opencode.json", opencode_config_json(), overwrite_paths) ++
+    write_file(dir, ".opencode/plugins/explicit.js", opencode_plugin_js(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/adr/skill.md", skill_adr(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/opportunity/skill.md", skill_opp(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/incident/skill.md", skill_inc(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/spec/skill.md", skill_spec(name), overwrite_paths) ++
+    write_file(dir, ".claude/skills/test/skill.md", skill_test(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/elixir-quality/skill.md", skill_elixir_quality(), overwrite_paths) ++
+    write_file(dir, ".claude/skills/phoenix-patterns/skill.md", skill_phoenix_patterns(), overwrite_paths)
   end
 
-  defp create_docs(dir, name) do
-    write_if_missing(dir, "README.md", docs_readme(name)) ++
-    write_if_missing(dir, "CLAUDE.md", "@AGENTS.md\n") ++
-    write_if_missing(dir, "GEMINI.md", Explicit.SystemPrompt.gemini_md()) ++
-    write_if_missing(dir, ".agents/AGENTS.md", "@../AGENTS.md\n") ++
-    write_if_missing(dir, "AGENTS.md", agents_md(name))
+  defp create_docs(dir, name, overwrite_paths) do
+    write_file(dir, "README.md", docs_readme(name), overwrite_paths) ++
+    write_file(dir, "CLAUDE.md", "@AGENTS.md\n", overwrite_paths) ++
+    write_file(dir, "GEMINI.md", Explicit.SystemPrompt.gemini_md(), overwrite_paths) ++
+    write_file(dir, ".agents/AGENTS.md", "@../AGENTS.md\n", overwrite_paths) ++
+    write_file(dir, "AGENTS.md", agents_md(name), overwrite_paths)
   end
 
-  defp create_lsp_config(dir) do
-    write_if_missing(dir, ".lsp.json", lsp_json())
+  defp create_lsp_config(dir, overwrite_paths) do
+    write_file(dir, ".lsp.json", lsp_json(), overwrite_paths)
   end
 
-  defp create_devenv(dir, name) do
-    # Always overwrite — devenv init creates a generic one, we need ours with Elixir + PG
-    path = Path.join(dir, "devenv.nix")
-    File.write!(path, devenv_nix(name))
-    ["devenv.nix"]
+  defp create_devenv(dir, name, overwrite_paths) do
+    write_file(dir, "devenv.nix", devenv_nix(name), overwrite_paths) ++
+    write_file(dir, "devenv.yaml", devenv_yaml(), overwrite_paths)
   end
 
   defp create_phoenix(dir, name) do
@@ -187,20 +187,20 @@ defmodule Explicit.Init do
     end
   end
 
-  defp create_infra(dir) do
-    write_if_missing(dir, "infra/main.tf", infra_main_tf()) ++
-    write_if_missing(dir, "infra/.gitignore", infra_gitignore())
+  defp create_infra(dir, overwrite_paths) do
+    write_file(dir, "infra/main.tf", infra_main_tf(), overwrite_paths) ++
+    write_file(dir, "infra/.gitignore", infra_gitignore(), overwrite_paths)
   end
 
-  defp create_vscode_config(dir) do
-    write_if_missing(dir, ".vscode/extensions.json", vscode_extensions()) ++
-    write_if_missing(dir, ".vscode/settings.json", vscode_settings())
+  defp create_vscode_config(dir, overwrite_paths) do
+    write_file(dir, ".vscode/extensions.json", vscode_extensions(), overwrite_paths) ++
+    write_file(dir, ".vscode/settings.json", vscode_settings(), overwrite_paths)
   end
 
-  defp write_if_missing(dir, rel_path, content) do
+  defp write_file(dir, rel_path, content, overwrite_paths) do
     path = Path.join(dir, rel_path)
 
-    if File.exists?(path) do
+    if File.exists?(path) and not MapSet.member?(overwrite_paths, rel_path) do
       []
     else
       File.mkdir_p!(Path.dirname(path))
