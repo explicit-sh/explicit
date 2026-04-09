@@ -84,6 +84,22 @@ Run `codex` from the repo root and Codex will pick up those hook files automatic
 
 Codex hook reference: <https://developers.openai.com/codex/hooks>
 
+## OpenCode Integration
+
+`explicit init` also creates `opencode.json` and a project-local plugin in `.opencode/plugins/explicit.js`.
+
+The plugin listens for `session.idle` and runs `explicit hooks stop opencode`.
+
+OpenCode plugin reference: <https://opencode.ai/docs/plugins/>
+
+## Gemini CLI Integration
+
+`explicit init` also creates `GEMINI.md` and `.gemini/settings.json`.
+
+Gemini loads `AGENTS.md` as project context and runs explicit hooks after file edits and after the agent turn.
+
+Gemini hook reference: <https://geminicli.com/docs/hooks/>
+
 ## Building
 
 ```bash

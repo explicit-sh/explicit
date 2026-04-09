@@ -347,18 +347,28 @@ fn envWithSelfInPath(allocator: mem.Allocator) !std.process.EnvMap {
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 
 fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const u8) !void {
-    const p = provider orelse {
-        stderr().writeAll("Usage: explicit hooks <claude|codex> <stop|check-fixme|check-code>\n") catch {};
+    const a = provider orelse {
+        stderr().writeAll("Usage: explicit hooks <claude|codex|opencode|gemini> <stop|check-fixme|check-code>\n") catch {};
+        stderr().writeAll("   or: explicit hooks <stop|check-fixme|check-code> <claude|codex|opencode|gemini>\n") catch {};
         process.exit(1);
     };
-    if (!mem.eql(u8, p, "claude") and !mem.eql(u8, p, "codex")) {
+    const b = hook_name orelse {
+        stderr().writeAll("Usage: explicit hooks <claude|codex|opencode|gemini> <stop|check-fixme|check-code>\n") catch {};
+        stderr().writeAll("   or: explicit hooks <stop|check-fixme|check-code> <claude|codex|opencode|gemini>\n") catch {};
+        process.exit(1);
+    };
+
+    var p = a;
+    var h = b;
+    if (isHookName(a) and isHookProvider(b)) {
+        p = b;
+        h = a;
+    }
+
+    if (!isHookProvider(p)) {
         stderr().print("Unknown hook provider: {s}\n", .{p}) catch {};
         process.exit(1);
     }
-    const h = hook_name orelse {
-        stderr().writeAll("Usage: explicit hooks <claude|codex> <stop|check-fixme|check-code>\n") catch {};
-        process.exit(1);
-    };
 
     if (mem.eql(u8, h, "stop")) {
         hookStop(allocator, p) catch |err| {
@@ -374,6 +384,14 @@ fn cmdHooks(allocator: mem.Allocator, provider: ?[]const u8, hook_name: ?[]const
         stderr().print("Unknown hook: {s}\n", .{h}) catch {};
         process.exit(1);
     }
+}
+
+fn isHookProvider(value: []const u8) bool {
+    return mem.eql(u8, value, "claude") or mem.eql(u8, value, "codex") or mem.eql(u8, value, "opencode") or mem.eql(u8, value, "gemini");
+}
+
+fn isHookName(value: []const u8) bool {
+    return mem.eql(u8, value, "stop") or mem.eql(u8, value, "check-fixme") or mem.eql(u8, value, "check-code");
 }
 
 /// Stop hook: quality gate + auto-format + compile warnings
@@ -733,7 +751,10 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
         env.put("EXPLICIT_PROJECT_DIR", project_dir) catch {};
         child.env_map = &env;
         _ = child.spawn() catch {
-            stderr().print("Created {s}/ (server not available — run 'explicit init' inside to finish setup)\n", .{name}) catch {};
+            stderr().print(
+                "Created {s}/ (server not available — run 'explicit init' inside to finish setup)\nNext:\n  cd {s}\n  explicit init\n  opencode\n  codex\n  explicit claude\n  explicit gemini\n",
+                .{ name, name },
+            ) catch {};
             return;
         };
 
@@ -761,14 +782,23 @@ fn cmdInitNew(allocator: mem.Allocator, name: []const u8) !void {
                     s2.close();
                 } else |_| {}
 
-                stderr().print("\nReady! Next:\n  cd {s}\n  explicit claude\n", .{name}) catch {};
+                stderr().print(
+                    "\nReady! Next:\n  cd {s}\n  opencode\n  codex\n  explicit claude\n  explicit gemini\n",
+                    .{name},
+                ) catch {};
                 return;
             } else |_| {}
         }
 
-        stderr().print("Created {s}/ (server timed out — run 'explicit init' inside to finish)\n", .{name}) catch {};
+        stderr().print(
+            "Created {s}/ (server timed out — run 'explicit init' inside to finish)\nNext:\n  cd {s}\n  explicit init\n  opencode\n  codex\n  explicit claude\n  explicit gemini\n",
+            .{ name, name },
+        ) catch {};
     } else {
-        stderr().print("Created {s}/\nNext:\n  cd {s}\n  explicit init\n  explicit claude\n", .{ name, name }) catch {};
+        stderr().print(
+            "Created {s}/\nNext:\n  cd {s}\n  explicit init\n  opencode\n  codex\n  explicit claude\n  explicit gemini\n",
+            .{ name, name },
+        ) catch {};
     }
 }
 
@@ -1316,6 +1346,11 @@ fn connectToSocket(allocator: mem.Allocator) !net.Stream {
     }
 
     stderr().writeAll("Error: Server did not start within 10 seconds.\n") catch {};
+    stderr().writeAll("Check the startup log: /tmp/explicit-server.log\n") catch {};
+    stderr().writeAll("Try: `which explicit-server` and `explicit-server daemon`\n") catch {};
+    if (!binaryInPath(allocator, "mix")) {
+        stderr().writeAll("Note: `mix` is not on PATH in this shell. That can break source/dev explicit-server setups and project scaffolding.\n") catch {};
+    }
     process.exit(1);
 }
 
@@ -1474,24 +1509,38 @@ fn printHuman(response: []const u8) !void {
         if (extractJsonString(response, "\"project\":\"")) |dir| {
             try out.print("Project: {s}\n", .{dir});
         }
-        // List created files
-        var it = mem.splitSequence(u8, response, "\"created\":[\"");
-        _ = it.next();
-        if (it.next()) |chunk| {
-            if (mem.indexOf(u8, chunk, "]")) |end| {
-                const files_str = chunk[0..end];
-                var fit = mem.splitSequence(u8, files_str, "\",\"");
-                try out.writeAll("Created:\n");
-                while (fit.next()) |f| {
-                    const clean = mem.trimRight(u8, f, "\"");
-                    if (clean.len > 0) {
-                        try out.writeAll("  ");
-                        try out.writeAll(clean);
-                        try out.writeAll("\n");
-                    }
-                }
-            }
-        }
+        try out.writeAll("\nWhat explicit set up:\n");
+        try out.writeAll("  docs/                 Project documentation: ADRs, opportunities, incidents, specs. Use `explicit docs ...`\n");
+        try out.writeAll("  .explicit/            explicit config and org registry for doc authors/owners\n");
+        try out.writeAll("  services/             App code workspace; Phoenix app may be scaffolded here\n");
+        try out.writeAll("  infra/                OpenTofu/Terraform starter config for infrastructure\n");
+        try out.writeAll("\nAgent instructions:\n");
+        try out.writeAll("  AGENTS.md             Shared repo instructions for Codex, Gemini, and OpenCode\n");
+        try out.writeAll("                        https://developers.openai.com/codex/guides/agents-md\n");
+        try out.writeAll("  GEMINI.md             Gemini CLI context entrypoint; points Gemini at AGENTS.md\n");
+        try out.writeAll("                        https://geminicli.com/docs/cli/gemini-md/\n");
+        try out.writeAll("  CLAUDE.md             Claude Code entrypoint; points Claude at AGENTS.md\n");
+        try out.writeAll("  .agents/AGENTS.md     Antigravity-compatible mirror of the root AGENTS.md\n");
+        try out.writeAll("  opencode.json         OpenCode project config; points instructions at AGENTS.md\n");
+        try out.writeAll("                        https://opencode.ai/docs/config/\n");
+        try out.writeAll("\nHooks:\n");
+        try out.writeAll("  .claude/settings.json Claude Code hooks that run explicit checks automatically\n");
+        try out.writeAll("  .codex/hooks.json     Codex hook commands for stop/post-tool checks\n");
+        try out.writeAll("  .codex/config.toml    Enables Codex hooks via `[features] codex_hooks = true`\n");
+        try out.writeAll("  .gemini/settings.json Gemini CLI hooks for AfterTool and AfterAgent checks\n");
+        try out.writeAll("                        https://geminicli.com/docs/hooks/\n");
+        try out.writeAll("  .opencode/plugins/    OpenCode plugin that runs explicit stop checks on session idle\n");
+        try out.writeAll("                        OpenCode plugins are event-based rather than native blocking stop hooks\n");
+        try out.writeAll("                        https://opencode.ai/docs/plugins/\n");
+        try out.writeAll("                        Hooks are deterministic commands fired on lifecycle events like Stop and PostToolUse\n");
+        try out.writeAll("                        https://developers.openai.com/codex/hooks\n");
+        try out.writeAll("\nEnvironment and editor:\n");
+        try out.writeAll("  devenv.nix            Reproducible dev shell, services, and process definitions\n");
+        try out.writeAll("  devenv.yaml           Generated by `devenv init` for upstream inputs/bootstrap\n");
+        try out.writeAll("  .lsp.json             Language server configuration for the repo\n");
+        try out.writeAll("  .vscode/              Recommended editor settings and extensions\n");
+        try out.writeAll("                        https://devenv.sh\n");
+        try printCreatedList(response, out);
         return;
     }
 
@@ -1559,6 +1608,31 @@ fn printHuman(response: []const u8) !void {
 fn printIfNonZero(out: anytype, response: []const u8, key: []const u8, label: []const u8) !void {
     if (extractJsonInt(response, key)) |n| {
         if (n > 0) try out.print("{s}: {d}\n", .{ label, n });
+    }
+}
+
+fn printCreatedList(response: []const u8, out: fs.File.DeprecatedWriter) !void {
+    var it = mem.splitSequence(u8, response, "\"created\":[\"");
+    _ = it.next();
+    if (it.next()) |chunk| {
+        if (mem.indexOf(u8, chunk, "]")) |end| {
+            const files_str = chunk[0..end];
+            var fit = mem.splitSequence(u8, files_str, "\",\"");
+            try out.writeAll("\nNew files this run:\n");
+            var any = false;
+            while (fit.next()) |f| {
+                const clean = mem.trimRight(u8, f, "\"");
+                if (clean.len > 0) {
+                    any = true;
+                    try out.writeAll("  ");
+                    try out.writeAll(clean);
+                    try out.writeAll("\n");
+                }
+            }
+            if (!any) {
+                try out.writeAll("  (none — files already existed)\n");
+            }
+        }
     }
 }
 

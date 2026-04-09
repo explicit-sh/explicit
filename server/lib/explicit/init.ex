@@ -1,7 +1,7 @@
 defmodule Explicit.Init do
   @moduledoc """
   Initialize explicit in an existing project.
-  Creates .explicit/, .claude/, .codex/, docs/ structure with schema, hooks, and skills.
+  Creates .explicit/, .claude/, .codex/, .gemini/, .opencode/, docs/ structure with schema, hooks, and skills.
   """
 
   require Logger
@@ -66,6 +66,8 @@ defmodule Explicit.Init do
       .vscode
       .agents
       .codex
+      .gemini
+      .opencode .opencode/plugins
       infra
       services
     )
@@ -88,6 +90,9 @@ defmodule Explicit.Init do
     write_if_missing(dir, ".claude/settings.json", claude_settings()) ++
     write_if_missing(dir, ".codex/hooks.json", codex_hooks()) ++
     write_if_missing(dir, ".codex/config.toml", codex_config_toml()) ++
+    write_if_missing(dir, ".gemini/settings.json", gemini_settings()) ++
+    write_if_missing(dir, "opencode.json", opencode_config_json()) ++
+    write_if_missing(dir, ".opencode/plugins/explicit.js", opencode_plugin_js()) ++
     write_if_missing(dir, ".claude/skills/adr/skill.md", skill_adr()) ++
     write_if_missing(dir, ".claude/skills/opportunity/skill.md", skill_opp()) ++
     write_if_missing(dir, ".claude/skills/incident/skill.md", skill_inc()) ++
@@ -100,6 +105,7 @@ defmodule Explicit.Init do
   defp create_docs(dir, name) do
     write_if_missing(dir, "README.md", docs_readme(name)) ++
     write_if_missing(dir, "CLAUDE.md", "@AGENTS.md\n") ++
+    write_if_missing(dir, "GEMINI.md", "@AGENTS.md\n") ++
     write_if_missing(dir, ".agents/AGENTS.md", "@../AGENTS.md\n") ++
     write_if_missing(dir, "AGENTS.md", agents_md(name))
   end
@@ -325,6 +331,97 @@ defmodule Explicit.Init do
     """
     [features]
     codex_hooks = true
+    """
+  end
+
+  defp gemini_settings do
+    Jason.encode!(%{
+      "context" => %{"fileName" => ["AGENTS.md", "GEMINI.md"]},
+      "hooks" => %{
+        "AfterTool" => [
+          %{
+            "matcher" => "write_file|replace",
+            "hooks" => [
+              %{"type" => "command", "command" => "explicit hooks gemini check-fixme"},
+              %{"type" => "command", "command" => "explicit hooks gemini check-code"}
+            ]
+          }
+        ],
+        "AfterAgent" => [
+          %{
+            "hooks" => [
+              %{"type" => "command", "command" => "explicit hooks stop gemini", "timeout" => 30000}
+            ]
+          }
+        ]
+      }
+    }, pretty: true) <> "\n"
+  end
+
+  defp opencode_config_json do
+    Jason.encode!(%{
+      "$schema" => "https://opencode.ai/config.json",
+      "instructions" => ["AGENTS.md"]
+    }, pretty: true) <> "\n"
+  end
+
+  defp opencode_plugin_js do
+    """
+    async function runExplicitHook(args, cwd) {
+      const proc = Bun.spawn(["explicit", "hooks", ...args], {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+
+      return {
+        exitCode,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      }
+    }
+
+    export const ExplicitPlugin = async ({ client, directory, worktree }) => {
+      const cwd = worktree || directory
+
+      return {
+        event: async ({ event }) => {
+          if (event.type !== "session.idle") return
+
+          const result = await runExplicitHook(["stop", "opencode"], cwd)
+          if (result.exitCode === 0) return
+
+          const message =
+            result.stderr ||
+            result.stdout ||
+            "explicit stop checks failed"
+
+          await client.app.log({
+            body: {
+              service: "explicit-opencode-plugin",
+              level: "warn",
+              message,
+              extra: { exitCode: result.exitCode, cwd },
+            },
+          })
+
+          try {
+            await client.tui.showToast({
+              body: {
+                message,
+                variant: "error",
+              },
+            })
+          } catch {}
+        },
+      }
+    }
     """
   end
 
