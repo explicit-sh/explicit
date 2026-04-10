@@ -10,6 +10,8 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest # arm64
+    env:
+      HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,15 +77,15 @@ jobs:
           generate_release_notes: true
 
       - name: Check out Homebrew tap
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
         uses: actions/checkout@v4
         with:
           repository: explicit-sh/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          token: ${{ env.HOMEBREW_TAP_GITHUB_TOKEN }}
           path: homebrew-tap
 
       - name: Update Homebrew formula
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
         run: |
           ./scripts/render-homebrew-formula.sh \
             "${{ steps.dist.outputs.version }}" \
@@ -91,7 +93,7 @@ jobs:
             > homebrew-tap/Formula/explicit.rb
 
       - name: Commit Homebrew formula update
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
         run: |
           cd homebrew-tap
           git config user.name "github-actions[bot]"
