@@ -36,8 +36,11 @@ jobs:
           MIX_ENV=prod mix release explicit_server --overwrite
 
       - name: Create distribution tarball
+        id: dist
         run: |
-          VERSION=${GITHUB_REF_NAME}
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          ARTIFACT="explicit-${TAG}-macos-arm64.tar.gz"
           mkdir -p dist/bin dist/lib
 
           # CLI binary
@@ -57,10 +60,48 @@ jobs:
 
           # Create tarball
           cd dist
-          tar czf "../explicit-${VERSION}-macos-arm64.tar.gz" .
+          tar czf "../${ARTIFACT}" .
+          cd ..
+
+          SHA256=$(shasum -a 256 "${ARTIFACT}" | awk '{print $1}')
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: explicit-v*-macos-arm64.tar.gz
+          files: ${{ steps.dist.outputs.artifact }}
           generate_release_notes: true
+
+      - name: Check out Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: explicit-sh/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew formula
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        run: |
+          ./scripts/render-homebrew-formula.sh \
+            "${{ steps.dist.outputs.version }}" \
+            "${{ steps.dist.outputs.sha256 }}" \
+            > homebrew-tap/Formula/explicit.rb
+
+      - name: Commit Homebrew formula update
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- Formula/explicit.rb; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+
+          git add Formula/explicit.rb
+          git commit -m "explicit ${{ steps.dist.outputs.version }}"
+          git push
