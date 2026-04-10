@@ -10,12 +10,6 @@ defmodule Explicit.SystemPrompt do
     IMPORTANT: This project uses explicit for code quality and decision documentation.
     You MUST follow this workflow strictly. The Stop hook will block you if you skip steps.
 
-    ## Sandbox
-
-    You are running inside a nono sandbox. You can ONLY access files in the current
-    project directory. Do NOT cd outside the project or reference absolute paths
-    outside it. All files must be created within the project root.
-
     ## RTK (MANDATORY)
 
     Every shell command you run MUST be prefixed with `rtk`.
@@ -218,12 +212,6 @@ defmodule Explicit.SystemPrompt do
     """
     IMPORTANT: This project uses explicit for code quality and decision documentation.
     You MUST follow this workflow strictly. The Stop hook will block you if you skip steps.
-
-    ## Sandbox
-
-    You are running inside a nono sandbox. You can ONLY access files in the current
-    project directory. Do NOT cd outside the project or reference absolute paths
-    outside it. All files must be created within the project root.
 
     ## RTK (MANDATORY)
 

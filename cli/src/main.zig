@@ -134,7 +134,7 @@ pub fn main() !void {
         printUsage();
         return;
     } else if (mem.eql(u8, command, "version") or mem.eql(u8, command, "--version") or mem.eql(u8, command, "-v")) {
-        stdout().writeAll("0.3.14\n") catch {};
+        stdout().writeAll("0.3.15\n") catch {};
         return;
     }
 
@@ -1188,18 +1188,6 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
         // Unescape \\n to real newlines and optionally drop sandbox instructions.
         unescaped = try std.mem.replaceOwned(u8, allocator, prompt, "\\n", "\n");
 
-        if (no_sandbox) {
-            const without_sandbox = try std.mem.replaceOwned(
-                u8,
-                allocator,
-                unescaped.?,
-                "## Sandbox\n\nYou are running inside a nono sandbox. You can ONLY access files in the current\nproject directory. Do NOT cd outside the project or reference absolute paths\noutside it. All files must be created within the project root.\n\n",
-                "",
-            );
-            allocator.free(unescaped.?);
-            unescaped = without_sandbox;
-        }
-
         if (prompt_mode == .text_flag) {
             prompt_arg = unescaped.?;
         } else {
@@ -1369,7 +1357,7 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
     }
 
     // Build argv: [nono wrap --profile <tool> --allow . --] tool [flags] [prompt]
-    var argv_buf: [40][]const u8 = undefined;
+    var argv_buf: [64][]const u8 = undefined;
     var argc: usize = 0;
 
     if (has_nono) {
@@ -1384,12 +1372,50 @@ fn cmdLaunchAI(allocator: mem.Allocator, tool_name: []const u8, prompt_mode: Pro
         // Expand $HOME for paths nono needs
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch "/tmp";
         const mix_home = try std.fmt.allocPrint(allocator, "{s}/.mix", .{home});
+        const terraform_home = try std.fmt.allocPrint(allocator, "{s}/.terraform.d", .{home});
+        const cargo_home = try std.fmt.allocPrint(allocator, "{s}/.cargo", .{home});
+        const rustup_home = try std.fmt.allocPrint(allocator, "{s}/.rustup", .{home});
+        const go_path = try std.fmt.allocPrint(allocator, "{s}/go", .{home});
+        const go_cache = try std.fmt.allocPrint(allocator, "{s}/Library/Caches/go-build", .{home});
         const mcp_json = try std.fmt.allocPrint(allocator, "{s}/.mcp.json", .{home});
         const shell_profile = try std.fmt.allocPrint(allocator, "{s}/.profile", .{home});
-        argv_buf[argc] = "--allow";
-        argc += 1;
-        argv_buf[argc] = mix_home;
-        argc += 1;
+
+        if (binaryInPath(allocator, "mix")) {
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = mix_home;
+            argc += 1;
+        }
+
+        if (binaryInPath(allocator, "tofu") or binaryInPath(allocator, "terraform")) {
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = terraform_home;
+            argc += 1;
+        }
+
+        if (binaryInPath(allocator, "cargo") or binaryInPath(allocator, "rustc") or binaryInPath(allocator, "rustup")) {
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = cargo_home;
+            argc += 1;
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = rustup_home;
+            argc += 1;
+        }
+
+        if (binaryInPath(allocator, "go")) {
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = go_path;
+            argc += 1;
+            argv_buf[argc] = "--allow";
+            argc += 1;
+            argv_buf[argc] = go_cache;
+            argc += 1;
+        }
+
         argv_buf[argc] = "--allow-file";
         argc += 1;
         argv_buf[argc] = mcp_json;
