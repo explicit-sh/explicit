@@ -134,7 +134,7 @@ pub fn main() !void {
         printUsage();
         return;
     } else if (mem.eql(u8, command, "version") or mem.eql(u8, command, "--version") or mem.eql(u8, command, "-v")) {
-        stdout().writeAll("0.3.13\n") catch {};
+        stdout().writeAll("0.3.14\n") catch {};
         return;
     }
 
@@ -476,10 +476,8 @@ fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
     // Find the mix project dir (services/*/ or project root)
     const mix_dir = findMixDir(allocator, git_root) orelse git_root;
 
-    // Run mix test — redirect output to a log file via bash so the hook's
-    // own stderr stays concise. Claude Code's Stop hook display collapses
-    // to the first stderr line, so flooding stderr with mix test output
-    // makes actual failures invisible.
+    // Run mix test — keep stderr concise and actionable so the agent sees
+    // the next task instead of a raw bootstrap/sandbox traceback.
     const test_log = "/tmp/explicit-mix-test.log";
     test_blk: {
         const cmd = std.fmt.allocPrint(
@@ -498,20 +496,9 @@ fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
         _ = test_proc.spawn() catch break :test_blk;
         const test_term = test_proc.wait() catch break :test_blk;
         if (test_term.Exited != 0) {
-            stderr().writeAll("Tests: FAILED\n") catch {};
-            // Print tail of log (last ~60 lines) so Claude sees the failure
-            if (fs.openFileAbsolute(test_log, .{})) |f| {
-                defer f.close();
-                const content = f.readToEndAlloc(allocator, 512 * 1024) catch "";
-                defer if (content.len > 0) allocator.free(content);
-                var start: usize = content.len;
-                var nl: usize = 0;
-                while (start > 0 and nl < 60) : (start -= 1) {
-                    if (content[start - 1] == '\n') nl += 1;
-                }
-                stderr().writeAll(content[start..]) catch {};
-                stderr().print("\n(full log: {s})\n", .{test_log}) catch {};
-            } else |_| {}
+            const content = readLogFile(allocator, test_log, 512 * 1024) orelse "";
+            defer if (content.len > 0) allocator.free(content);
+            printMixFailureSummary(allocator, "Tests", "mix test", mix_dir, test_log, content);
             has_issues = true;
         }
     }
@@ -542,13 +529,9 @@ fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
         _ = compile.spawn() catch break :compile_blk;
         const term = compile.wait() catch break :compile_blk;
         if (term.Exited != 0) {
-            stderr().writeAll("Compile: FAILED\n") catch {};
-            if (fs.openFileAbsolute(compile_log, .{})) |f| {
-                defer f.close();
-                const content = f.readToEndAlloc(allocator, 256 * 1024) catch "";
-                defer if (content.len > 0) allocator.free(content);
-                stderr().writeAll(content) catch {};
-            } else |_| {}
+            const content = readLogFile(allocator, compile_log, 256 * 1024) orelse "";
+            defer if (content.len > 0) allocator.free(content);
+            printMixFailureSummary(allocator, "Compile", "mix compile --warnings-as-errors", mix_dir, compile_log, content);
             has_issues = true;
         }
     }
@@ -560,17 +543,29 @@ fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
         const tf_dir = try std.fmt.allocPrint(allocator, "{s}/infra/.terraform", .{git_root});
         defer allocator.free(tf_dir);
         if (fs.accessAbsolute(tf_dir, .{})) {
-            var validate = std.process.Child.init(&.{ "tofu", "validate" }, allocator);
-            validate.cwd = infra_dir;
-            validate.stdout_behavior = .Inherit;
-            validate.stderr_behavior = .Inherit;
-            _ = validate.spawn() catch {};
-            if (validate.wait()) |term| {
-                if (term.Exited != 0) {
-                    stderr().writeAll("tofu validate: FAILED\n") catch {};
-                    has_issues = true;
-                }
-            } else |_| {}
+            const tofu_log = "/tmp/explicit-tofu-validate.log";
+            const cmd = std.fmt.allocPrint(
+                allocator,
+                "cd {s} && tofu validate > {s} 2>&1",
+                .{ infra_dir, tofu_log },
+            ) catch "";
+            defer if (cmd.len > 0) allocator.free(cmd);
+            if (cmd.len == 0) {
+                has_issues = true;
+            } else {
+                var validate = std.process.Child.init(&.{ "bash", "-c", cmd }, allocator);
+                validate.stdout_behavior = .Ignore;
+                validate.stderr_behavior = .Ignore;
+                _ = validate.spawn() catch {};
+                if (validate.wait()) |term| {
+                    if (term.Exited != 0) {
+                        const content = readLogFile(allocator, tofu_log, 256 * 1024) orelse "";
+                        defer if (content.len > 0) allocator.free(content);
+                        printTofuFailureSummary(allocator, infra_dir, tofu_log, content);
+                        has_issues = true;
+                    }
+                } else |_| {}
+            }
         } else |_| {}
     }
 
@@ -585,6 +580,140 @@ fn hookStop(allocator: mem.Allocator, provider: []const u8) !void {
     }
     stderr().writeAll("All checks passed.\n") catch {};
     process.exit(0);
+}
+
+fn readLogFile(allocator: mem.Allocator, path: []const u8, max_bytes: usize) ?[]const u8 {
+    const file = fs.openFileAbsolute(path, .{}) catch return null;
+    defer file.close();
+    return file.readToEndAlloc(allocator, max_bytes) catch null;
+}
+
+fn printMixFailureSummary(
+    allocator: mem.Allocator,
+    phase: []const u8,
+    rerun_cmd: []const u8,
+    mix_dir: []const u8,
+    log_path: []const u8,
+    content: []const u8,
+) void {
+    _ = allocator;
+    const err = stderr();
+    err.print("{s}: FAILED\n", .{phase}) catch {};
+
+    var explained = false;
+
+    if (mem.indexOf(u8, content, "Mix requires the Hex package manager") != null) {
+        err.writeAll("Action: install Hex before running Mix tasks.\n") catch {};
+        err.print("Run: cd {s} && mix local.hex --force\n", .{mix_dir}) catch {};
+        explained = true;
+    }
+
+    if (mem.indexOf(u8, content, "Could not find an SCM for dependency") != null or
+        mem.indexOf(u8, content, "Unchecked dependencies for environment") != null or
+        mem.indexOf(u8, content, "dependency is not available") != null)
+    {
+        err.writeAll("Action: fetch Elixir dependencies before retrying.\n") catch {};
+        err.print("Run: cd {s} && mix deps.get\n", .{mix_dir}) catch {};
+        explained = true;
+    }
+
+    if (mem.indexOf(u8, content, "No package with name") != null and mem.indexOf(u8, content, "Hex") != null) {
+        err.writeAll("Action: Hex is installed but the package index is missing or stale.\n") catch {};
+        err.print("Run: cd {s} && mix local.hex --force && mix deps.get\n", .{mix_dir}) catch {};
+        explained = true;
+    }
+
+    if (!explained) {
+        err.print("Action: rerun the failing command directly and fix the reported error.\nRun: cd {s} && {s}\n", .{ mix_dir, rerun_cmd }) catch {};
+    }
+
+    printRelevantLogLines(content, 10);
+    err.print("Full log: {s}\n", .{log_path}) catch {};
+}
+
+fn printTofuFailureSummary(
+    allocator: mem.Allocator,
+    infra_dir: []const u8,
+    log_path: []const u8,
+    content: []const u8,
+) void {
+    _ = allocator;
+    const err = stderr();
+    err.writeAll("OpenTofu: FAILED\n") catch {};
+
+    var explained = false;
+
+    if (mem.indexOf(u8, content, ".terraform.d") != null and mem.indexOf(u8, content, "operation not permitted") != null) {
+        err.writeAll("Action: OpenTofu could not read ~/.terraform.d inside the sandbox.\n") catch {};
+        err.writeAll("Either grant access to ~/.terraform.d, or bypass global config for this repo-local validation.\n") catch {};
+        err.print("Run: cd {s} && TF_CLI_CONFIG_FILE=/dev/null tofu init && TF_CLI_CONFIG_FILE=/dev/null tofu validate\n", .{infra_dir}) catch {};
+        explained = true;
+    }
+
+    if (mem.indexOf(u8, content, "failed to verify checksum") != null or
+        mem.indexOf(u8, content, "provider") != null and mem.indexOf(u8, content, "operation not permitted") != null)
+    {
+        err.writeAll("Action: the cached OpenTofu provider state is unusable in this environment.\n") catch {};
+        err.print("Run: cd {s} && rm -rf .terraform && TF_CLI_CONFIG_FILE=/dev/null tofu init && TF_CLI_CONFIG_FILE=/dev/null tofu validate\n", .{infra_dir}) catch {};
+        explained = true;
+    }
+
+    if (mem.indexOf(u8, content, "Missing required provider") != null or
+        mem.indexOf(u8, content, "Inconsistent dependency lock file") != null or
+        mem.indexOf(u8, content, "Module not installed") != null)
+    {
+        err.writeAll("Action: initialize infra dependencies before validating.\n") catch {};
+        err.print("Run: cd {s} && tofu init && tofu validate\n", .{infra_dir}) catch {};
+        explained = true;
+    }
+
+    if (!explained) {
+        err.print("Action: rerun OpenTofu directly and fix the reported error.\nRun: cd {s} && tofu validate\n", .{infra_dir}) catch {};
+    }
+
+    printRelevantLogLines(content, 10);
+    err.print("Full log: {s}\n", .{log_path}) catch {};
+}
+
+fn printRelevantLogLines(content: []const u8, max_lines: usize) void {
+    const err = stderr();
+    var lines = mem.splitScalar(u8, content, '\n');
+    var shown: usize = 0;
+
+    while (lines.next()) |line| {
+        const trimmed = mem.trim(u8, line, " \r\t");
+        if (trimmed.len == 0) continue;
+
+        if (mem.indexOf(u8, trimmed, "**") != null or
+            mem.indexOf(u8, trimmed, "Error") != null or
+            mem.indexOf(u8, trimmed, "error") != null or
+            mem.indexOf(u8, trimmed, "FAILED") != null or
+            mem.indexOf(u8, trimmed, "failed") != null or
+            mem.indexOf(u8, trimmed, "Permission") != null or
+            mem.indexOf(u8, trimmed, "permission") != null or
+            mem.indexOf(u8, trimmed, "Hex") != null or
+            mem.indexOf(u8, trimmed, "SCM") != null or
+            mem.indexOf(u8, trimmed, "dependency") != null or
+            mem.indexOf(u8, trimmed, "provider") != null)
+        {
+            err.print("  {s}\n", .{trimmed}) catch {};
+            shown += 1;
+            if (shown >= max_lines) break;
+        }
+    }
+
+    if (shown > 0) return;
+
+    var start: usize = content.len;
+    var nl: usize = 0;
+    while (start > 0 and nl < max_lines) : (start -= 1) {
+        if (content[start - 1] == '\n') nl += 1;
+    }
+
+    if (start < content.len) {
+        err.writeAll(mem.trim(u8, content[start..], "\n")) catch {};
+        err.writeAll("\n") catch {};
+    }
 }
 
 /// Check quality and output concise summary to stderr. Returns true if issues found.

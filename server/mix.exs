@@ -4,7 +4,7 @@ defmodule Explicit.MixProject do
   def project do
     [
       app: :explicit,
-      version: "0.3.13",
+      version: "0.3.14",
       elixir: "~> 1.20-rc",
       start_permanent: Mix.env() == :prod,
       deps: deps(),

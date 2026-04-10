@@ -30,7 +30,7 @@ defmodule Explicit.Sarif do
           "tool" => %{
             "driver" => %{
               "name" => "explicit",
-              "version" => "0.3.13",
+              "version" => "0.3.14",
               "informationUri" => "https://github.com/explicit-sh/explicit",
               "rules" => build_rules(all_results)
             }
