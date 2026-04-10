@@ -134,7 +134,7 @@ pub fn main() !void {
         printUsage();
         return;
     } else if (mem.eql(u8, command, "version") or mem.eql(u8, command, "--version") or mem.eql(u8, command, "-v")) {
-        stdout().writeAll("0.3.12\n") catch {};
+        stdout().writeAll("0.3.13\n") catch {};
         return;
     }
 
